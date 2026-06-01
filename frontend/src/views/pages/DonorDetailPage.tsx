@@ -1,5 +1,5 @@
-import { ArrowLeft, Power } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ArrowLeft, Edit, Power, Save, X } from "lucide-react";
+import { type FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { bankDarahController } from "../../controllers/bankDarahController";
 import type { Donor } from "../../models/types";
@@ -12,18 +12,45 @@ export default function DonorDetailPage() {
   const { id = "" } = useParams();
   const [donor, setDonor] = useState<Donor | null>(null);
   const [saving, setSaving] = useState(false);
+  const [showEdit, setShowEdit] = useState(false);
+  const [editForm, setEditForm] = useState({
+    fullName: "",
+    phone: "",
+    email: "",
+    address: "",
+  });
 
   useEffect(() => {
-    bankDarahController.donor(id).then(setDonor);
+    bankDarahController.donor(id).then((d) => {
+      setDonor(d);
+      setEditForm({
+        fullName: d.fullName,
+        phone: d.phone,
+        email: d.email ?? "",
+        address: d.address,
+      });
+    });
   }, [id]);
 
   async function toggleStatus() {
     if (!donor) return;
-
     setSaving(true);
     const updated = await bankDarahController.updateDonorStatus(donor.id, !donor.isActive);
     setDonor(updated);
     setSaving(false);
+  }
+
+  async function submitEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!donor) return;
+    setSaving(true);
+    try {
+      const updated = await bankDarahController.updateDonor(donor.id, editForm);
+      setDonor(updated);
+      setShowEdit(false);
+    } finally {
+      setSaving(false);
+    }
   }
 
   if (!donor) return <Loading title="Memuat profil donor" />;
@@ -39,6 +66,10 @@ export default function DonorDetailPage() {
               <ArrowLeft size={18} />
               Kembali
             </Link>
+            <button className="btn secondary" type="button" onClick={() => setShowEdit((v) => !v)}>
+              {showEdit ? <X size={18} /> : <Edit size={18} />}
+              {showEdit ? "Batal Edit" : "Edit Data"}
+            </button>
             <button className="btn danger" disabled={saving} onClick={toggleStatus} type="button">
               <Power size={18} />
               {donor.isActive ? "Nonaktifkan" : "Aktifkan"}
@@ -46,6 +77,50 @@ export default function DonorDetailPage() {
           </div>
         }
       />
+
+      {/* ── Form Edit Donor ── */}
+      {showEdit && (
+        <form className="panel form-grid" onSubmit={submitEdit}>
+          <label>
+            Nama Lengkap
+            <input
+              value={editForm.fullName}
+              onChange={(e) => setEditForm({ ...editForm, fullName: e.target.value })}
+              required
+            />
+          </label>
+          <label>
+            Nomor Telepon
+            <input
+              value={editForm.phone}
+              onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+              required
+            />
+          </label>
+          <label>
+            Email
+            <input
+              type="email"
+              value={editForm.email}
+              onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+            />
+          </label>
+          <label className="span-2">
+            Alamat
+            <input
+              value={editForm.address}
+              onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
+            />
+          </label>
+          <div className="form-actions span-2">
+            <button className="btn primary" type="submit" disabled={saving}>
+              <Save size={16} />
+              {saving ? "Menyimpan..." : "Simpan Perubahan"}
+            </button>
+          </div>
+        </form>
+      )}
+
       <section className="panel profile-detail">
         <div className="avatar large">{donor.bloodType}</div>
         <div>

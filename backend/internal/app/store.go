@@ -676,6 +676,32 @@ func (s *Store) GetDonor(ctx context.Context, key string) (Donor, error) {
 	return donor, nil
 }
 
+func (s *Store) FindDonorByLogin(ctx context.Context, loginKey string) (Donor, error) {
+	trimmed := strings.TrimSpace(loginKey)
+	if trimmed == "" {
+		return Donor{}, errBadRequest("kunci login tidak boleh kosong")
+	}
+
+	row := s.pool.QueryRow(ctx, donorSelectSQL()+`
+		WHERE (LOWER(u.email) = LOWER($3) OR u.phone = $3 OR u.nik = $3) AND u.is_active = TRUE
+		LIMIT 1
+	`, s.cfg.PMILongitude, s.cfg.PMILatitude, trimmed)
+	donor, err := scanDonor(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Donor{}, errNotFound("akun pendonor tidak ditemukan")
+	}
+	if err != nil {
+		return Donor{}, err
+	}
+
+	history, err := s.DonationHistory(ctx, donor.ID)
+	if err != nil {
+		return Donor{}, err
+	}
+	donor.DonationHistory = history
+	return donor, nil
+}
+
 func (s *Store) CreateDonor(ctx context.Context, input DonorCreateRequest) (Donor, error) {
 	if input.FullName == "" || input.Phone == "" || input.BloodType == "" || input.Gender == "" || input.Address == "" {
 		return Donor{}, errBadRequest("data pendonor belum lengkap")
@@ -707,7 +733,7 @@ func (s *Store) CreateDonor(ctx context.Context, input DonorCreateRequest) (Dono
 		)
 		VALUES (
 			'pending:' || gen_random_uuid()::TEXT, $1, $2, $3, $4, $5, $6::DATE, $7, $8,
-			$9, $10, ST_SetSRID(ST_MakePoint($10, $9), 4326)::geography, $11, TRUE, TRUE
+			$9::DECIMAL, $10::DECIMAL, ST_SetSRID(ST_MakePoint($10::DOUBLE PRECISION, $9::DOUBLE PRECISION), 4326)::geography, $11, TRUE, TRUE
 		)
 		RETURNING id::TEXT
 	`, input.NIK, input.FullName, nullString(input.Email), input.Phone, input.BloodType, input.BirthDate, input.Gender, input.Address, input.Latitude, input.Longitude, nullString(input.DeviceToken)).Scan(&id)
@@ -836,6 +862,45 @@ func (s *Store) UpdateDonor(ctx context.Context, id string, input DonorUpdateReq
 	return s.GetDonor(ctx, id)
 }
 
+func (s *Store) UpdateDonorByQRToken(ctx context.Context, qrToken string, input UpdateDonorRequest) (*Donor, error) {
+	query := `UPDATE users SET
+		full_name   = COALESCE(NULLIF($2,''), full_name),
+		email       = COALESCE(NULLIF($3,''), email),
+		phone       = COALESCE(NULLIF($4,''), phone),
+		address     = COALESCE(NULLIF($5,''), address),
+		latitude    = CASE WHEN $6 != 0 THEN $6 ELSE latitude END,
+		longitude   = CASE WHEN $7 != 0 THEN $7 ELSE longitude END,
+		updated_at  = NOW()
+	WHERE qr_token = $1
+	RETURNING id::TEXT, qr_token, full_name, phone, COALESCE(email,''),
+	          blood_type, gender, COALESCE(address,''),
+	          0::DOUBLE PRECISION AS distance_km,
+	          COALESCE(to_char(last_donation,'YYYY-MM-DD'),''),
+	          COALESCE(to_char(next_eligible,'YYYY-MM-DD'),''),
+	          is_eligible, is_active`
+	row := s.pool.QueryRow(ctx, query, qrToken,
+		input.FullName, input.Email, input.Phone, input.Address, input.Latitude, input.Longitude)
+	donor, err := scanDonor(row)
+	if err != nil {
+		return nil, err
+	}
+	return &donor, nil
+}
+
+func (s *Store) CloseRequest(ctx context.Context, requestID string) (EmergencyRequest, error) {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE blood_requests
+		SET status = 'FULFILLED', fulfilled_at = NOW()
+		WHERE id::TEXT = $1
+	`, requestID)
+	if err != nil {
+		return EmergencyRequest{}, err
+	}
+	return s.GetRequest(ctx, requestID)
+}
+
+
+
 func (s *Store) UpdateDonorStatus(ctx context.Context, id string, isActive bool) (Donor, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE users
@@ -895,7 +960,7 @@ func (s *Store) CheckinDonation(ctx context.Context, input DonationCheckinReques
 	}
 
 	eligible, reasons := validateMedical(donor, input)
-	status := "CHECKED_IN"
+	status := "COMPLETED"
 	if !eligible {
 		status = "REJECTED"
 	}
@@ -1224,7 +1289,7 @@ func donorSelectSQL() string {
 		       u.blood_type,
 		       u.gender,
 		       COALESCE(u.address, ''),
-		       COALESCE(ROUND((ST_Distance(u.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) / 1000)::NUMERIC, 1)::DOUBLE PRECISION, 0),
+		       COALESCE(ROUND((ST_Distance(u.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) / 1000)::NUMERIC, 1)::DOUBLE PRECISION, 0) AS distance_km,
 		       COALESCE(to_char(u.last_donation, 'YYYY-MM-DD'), ''),
 		       COALESCE(to_char(u.next_eligible, 'YYYY-MM-DD'), ''),
 		       u.is_eligible,

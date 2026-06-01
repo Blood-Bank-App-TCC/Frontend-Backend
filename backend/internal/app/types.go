@@ -181,3 +181,12 @@ type HospitalRequest struct {
 	PicPhone  string  `json:"picPhone"`
 	Email     string  `json:"email"`
 }
+
+type UpdateDonorRequest struct {
+	FullName  string  `json:"fullName"`
+	Email     string  `json:"email"`
+	Phone     string  `json:"phone"`
+	Address   string  `json:"address"`
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+}

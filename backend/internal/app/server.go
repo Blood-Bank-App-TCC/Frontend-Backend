@@ -83,6 +83,16 @@ func (a *App) routeMobile(w http.ResponseWriter, r *http.Request, path string) {
 		a.handleMobileRespond(w, r)
 	case r.Method == http.MethodGet && path == "/mobile/broadcast/active":
 		a.handleMobileActiveBroadcast(w, r)
+	case r.Method == http.MethodPost && path == "/mobile/login":
+		a.handleMobileLogin(w, r)
+	case r.Method == http.MethodPost && path == "/mobile/register":
+		a.handleMobileRegister(w, r)
+	case r.Method == http.MethodGet && path == "/mobile/donor":
+		a.handleMobileGetDonor(w, r)
+	case r.Method == http.MethodGet && path == "/mobile/stock":
+		a.handleMobileListStock(w, r)
+	case r.Method == http.MethodPut && path == "/mobile/donor":
+		a.handleMobileUpdateDonor(w, r)
 	default:
 		fail(w, http.StatusNotFound, "NOT_FOUND", "Endpoint tidak ditemukan.")
 	}
@@ -110,6 +120,8 @@ func (a *App) routeProtected(w http.ResponseWriter, r *http.Request, path string
 		a.handleBroadcast(w, r, segments[2])
 	case r.Method == http.MethodGet && len(segments) == 4 && segments[0] == "emergency" && segments[1] == "requests" && segments[3] == "live-responses":
 		a.handleLiveResponses(w, r, segments[2])
+	case r.Method == http.MethodPut && len(segments) == 4 && segments[0] == "emergency" && segments[1] == "requests" && segments[3] == "close":
+		a.handleCloseRequest(w, r, segments[2])
 
 	case r.Method == http.MethodGet && path == "/donors":
 		a.handleListDonors(w, r)
@@ -219,6 +231,63 @@ func (a *App) handleMobileActiveBroadcast(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ok(w, active, http.StatusOK)
+}
+
+func (a *App) handleMobileLogin(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		LoginKey string `json:"loginKey"`
+	}
+	if err := decodeJSON(r, &input); err != nil {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "Body login tidak valid.")
+		return
+	}
+
+	key := input.LoginKey
+	if key == "" {
+		key = input.Email
+	}
+
+	donor, err := a.store.FindDonorByLogin(r.Context(), key)
+	a.respond(w, donor, err, http.StatusOK)
+}
+
+func (a *App) handleMobileRegister(w http.ResponseWriter, r *http.Request) {
+	var input DonorCreateRequest
+	if err := decodeJSON(r, &input); err != nil {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "Body registrasi tidak valid.")
+		return
+	}
+	donor, err := a.store.CreateDonor(r.Context(), input)
+	a.respond(w, donor, err, http.StatusCreated)
+}
+
+func (a *App) handleMobileGetDonor(w http.ResponseWriter, r *http.Request) {
+	qrToken := strings.TrimSpace(r.URL.Query().Get("qr_token"))
+	if qrToken == "" {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "qr_token wajib diisi.")
+		return
+	}
+
+	donor, err := a.store.activeDonorByQRToken(r.Context(), qrToken)
+	if err != nil {
+		a.respond(w, nil, err, http.StatusOK)
+		return
+	}
+
+	// Fetch history as well
+	history, err := a.store.DonationHistory(r.Context(), donor.ID)
+	if err == nil {
+		donor.DonationHistory = history
+	}
+
+	ok(w, donor, http.StatusOK)
+}
+
+func (a *App) handleMobileListStock(w http.ResponseWriter, r *http.Request) {
+	stock, err := a.store.ListStock(r.Context())
+	a.respond(w, stock, err, http.StatusOK)
 }
 
 func (a *App) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -386,6 +455,20 @@ func (a *App) handleCheckin(w http.ResponseWriter, r *http.Request) {
 	}
 	admin := adminFromContext(r.Context())
 	result, err := a.store.CheckinDonation(r.Context(), input, admin.ID)
+	if err == nil && result.IsEligible {
+		donor, donorErr := a.store.GetDonor(r.Context(), input.DonorUUID)
+		if donorErr == nil {
+			_, stockErr := a.store.UpdateStock(r.Context(), donor.BloodType, "WB", StockUpdateRequest{
+				Mode:      "add",
+				Quantity:  1,
+				Reference: result.DonationID,
+				Notes:     "auto update dari checkin donor",
+			}, admin.ID)
+			if stockErr != nil {
+				a.logger.Error("auto stock update after checkin failed", "error", stockErr, "donation_id", result.DonationID)
+			}
+		}
+	}
 	a.respond(w, result, err, http.StatusOK)
 }
 
@@ -421,6 +504,37 @@ func (a *App) handleUpdateHospital(w http.ResponseWriter, r *http.Request, id st
 	}
 	hospital, err := a.store.UpdateHospital(r.Context(), id, input)
 	a.respond(w, hospital, err, http.StatusOK)
+}
+
+func (a *App) handleMobileUpdateDonor(w http.ResponseWriter, r *http.Request) {
+	qrToken := r.URL.Query().Get("qr_token")
+	if strings.TrimSpace(qrToken) == "" {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "qr_token wajib diisi.")
+		return
+	}
+	var input UpdateDonorRequest
+	if err := decodeJSON(r, &input); err != nil {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "Body tidak valid.")
+		return
+	}
+	donor, err := a.store.UpdateDonorByQRToken(r.Context(), qrToken, input)
+	if err != nil {
+		a.serverError(w, err)
+		return
+	}
+	ok(w, donor, http.StatusOK)
+}
+
+func (a *App) handleCloseRequest(w http.ResponseWriter, r *http.Request, requestID string) {
+	if !a.requireRole(w, r, "SUPER_ADMIN", "OPERATOR") {
+		return
+	}
+	req, err := a.store.CloseRequest(r.Context(), requestID)
+	if err != nil {
+		a.serverError(w, err)
+		return
+	}
+	ok(w, req, http.StatusOK)
 }
 
 func (a *App) requireRole(w http.ResponseWriter, r *http.Request, roles ...string) bool {
