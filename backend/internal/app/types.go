@@ -190,3 +190,8 @@ type UpdateDonorRequest struct {
 	Latitude  float64 `json:"latitude"`
 	Longitude float64 `json:"longitude"`
 }
+
+type DeviceTokenRequest struct {
+	QRToken     string `json:"qr_token"`
+	DeviceToken string `json:"device_token"`
+}

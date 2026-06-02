@@ -899,6 +899,24 @@ func (s *Store) CloseRequest(ctx context.Context, requestID string) (EmergencyRe
 	return s.GetRequest(ctx, requestID)
 }
 
+func (s *Store) UpdateDeviceToken(ctx context.Context, qrToken, deviceToken string) (Donor, error) {
+	donor, err := s.activeDonorByQRToken(ctx, qrToken)
+	if err != nil {
+		return Donor{}, err
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		UPDATE users
+		SET device_token = $2, updated_at = NOW()
+		WHERE id::TEXT = $1
+	`, donor.ID, nullString(deviceToken))
+	if err != nil {
+		return Donor{}, err
+	}
+
+	return s.GetDonor(ctx, donor.ID)
+}
+
 
 
 func (s *Store) UpdateDonorStatus(ctx context.Context, id string, isActive bool) (Donor, error) {

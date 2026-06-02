@@ -18,6 +18,10 @@ backend/.env
 .env.*
 !.env.example
 
+# Firebase credentials (JANGAN commit!)
+**/firebase-service-account*.json
+**/serviceAccountKey*.json
+
 # Logs
 *.log
 npm-debug.log*
@@ -33,4 +37,6 @@ Thumbs.db
 
 # Local requirement/reference files
 *.pdf
-requirements/*.pdf
+requirements/*.pdf 
+
+
