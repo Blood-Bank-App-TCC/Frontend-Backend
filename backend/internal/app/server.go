@@ -91,6 +91,8 @@ func (a *App) routeMobile(w http.ResponseWriter, r *http.Request, path string) {
 		a.handleMobileGetDonor(w, r)
 	case r.Method == http.MethodGet && path == "/mobile/stock":
 		a.handleMobileListStock(w, r)
+	case r.Method == http.MethodPut && path == "/mobile/device-token":
+		a.handleMobileUpdateDeviceToken(w, r)
 	case r.Method == http.MethodPut && path == "/mobile/donor":
 		a.handleMobileUpdateDonor(w, r)
 	default:
@@ -524,6 +526,25 @@ func (a *App) handleMobileUpdateDonor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok(w, donor, http.StatusOK)
+}
+
+func (a *App) handleMobileUpdateDeviceToken(w http.ResponseWriter, r *http.Request) {
+	var input DeviceTokenRequest
+	if err := decodeJSON(r, &input); err != nil {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "Body tidak valid.")
+		return
+	}
+	if strings.TrimSpace(input.QRToken) == "" {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "qr_token wajib diisi.")
+		return
+	}
+	if strings.TrimSpace(input.DeviceToken) == "" {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "device_token wajib diisi.")
+		return
+	}
+
+	donor, err := a.store.UpdateDeviceToken(r.Context(), input.QRToken, input.DeviceToken)
+	a.respond(w, donor, err, http.StatusOK)
 }
 
 func (a *App) handleCloseRequest(w http.ResponseWriter, r *http.Request, requestID string) {

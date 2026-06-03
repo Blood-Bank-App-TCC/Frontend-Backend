@@ -906,14 +906,24 @@ func (s *Store) CloseRequest(ctx context.Context, requestID string) (EmergencyRe
 		return EmergencyRequest{}, errNotFound("permintaan tidak ditemukan")
 	}
 
-	_, err = tx.Exec(ctx, `
-		UPDATE emergency_broadcasts
-		SET status = 'CLOSED', closed_at = NOW()
-		WHERE request_id::TEXT = $1 AND status = 'ACTIVE'
-	`, requestID)
+func (s *Store) UpdateDeviceToken(ctx context.Context, qrToken, deviceToken string) (Donor, error) {
+	donor, err := s.activeDonorByQRToken(ctx, qrToken)
 	if err != nil {
-		return EmergencyRequest{}, err
+		return Donor{}, err
 	}
+
+	_, err = s.pool.Exec(ctx, `
+		UPDATE users
+		SET device_token = $2, updated_at = NOW()
+		WHERE id::TEXT = $1
+	`, donor.ID, nullString(deviceToken))
+	if err != nil {
+		return Donor{}, err
+	}
+
+	return s.GetDonor(ctx, donor.ID)
+}
+
 
 	if err := tx.Commit(ctx); err != nil {
 		return EmergencyRequest{}, err
