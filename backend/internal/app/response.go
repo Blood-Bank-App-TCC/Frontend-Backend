@@ -16,6 +16,10 @@ func ok(w http.ResponseWriter, data interface{}, status int) {
 	writeJSON(w, status, envelope{Success: true, Data: data})
 }
 
+func okMessage(w http.ResponseWriter, message string, status int) {
+	writeJSON(w, status, envelope{Success: true, Message: message})
+}
+
 func fail(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, envelope{Success: false, Code: code, Message: message})
 }

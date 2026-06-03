@@ -37,6 +37,13 @@ Username: operator
 Password: pmi123
 ```
 
+Login demo donor mobile:
+
+```text
+Email donor seed : rian@example.test
+Password         : pmi123
+```
+
 Token QR demo untuk check-in manual:
 
 ```text
@@ -111,6 +118,21 @@ POST   /donations/checkin
 GET    /hospitals
 POST   /hospitals
 PUT    /hospitals/:id
+DELETE /hospitals/:id
+```
+
+Endpoint mobile donor:
+
+```text
+POST   /mobile/register
+POST   /mobile/login
+GET    /mobile/history
+GET    /mobile/donor
+GET    /mobile/stock
+GET    /mobile/broadcast/active
+POST   /mobile/respond
+PUT    /mobile/device-token
+PUT    /mobile/donor
 ```
 
 Response sukses:
@@ -146,6 +168,12 @@ Migration idempotent berada di `backend/database/migrations/001_init.sql` dan me
 - `emergency_broadcasts`
 - `live_responses`
 
+Migration lanjutan `backend/database/migrations/002_auth_history_notifications.sql` menambahkan:
+
+- `users.password_hash`
+- `notification_logs`
+- index riwayat donasi dan rumah sakit aktif
+
 Seed awal mencakup admin `operator`, `superadmin`, stok darah awal, rumah sakit contoh, donor contoh, request darurat contoh, live responses, dan riwayat donasi.
 
 ## Fitur Web Admin
@@ -167,4 +195,7 @@ Struktur service sudah siap diarahkan ke Cloud Run dan Cloud SQL:
 
 - Frontend dapat dibuild menjadi container Nginx atau hosting statis
 - Backend menggunakan `DATABASE_URL`, `JWT_SECRET`, dan `QR_ENCRYPTION_KEY` dari environment
+- FCM thank-you notification membutuhkan `FCM_PROJECT_ID` dan `FCM_SERVICE_ACCOUNT_PATH`
 - Database lokal memakai PostgreSQL/PostGIS; untuk produksi gunakan Cloud SQL PostgreSQL dengan ekstensi PostGIS
+
+Dokumentasi OpenAPI statis untuk endpoint baru tersedia di `backend/docs/openapi.yaml`.

@@ -132,6 +132,7 @@ type DonorCreateRequest struct {
 	NIK         string  `json:"nik"`
 	FullName    string  `json:"fullName"`
 	Email       string  `json:"email"`
+	Password    string  `json:"password,omitempty"`
 	Phone       string  `json:"phone"`
 	BloodType   string  `json:"bloodType"`
 	Gender      string  `json:"gender"`
@@ -170,6 +171,9 @@ type DonationCheckinResult struct {
 	DonationID string   `json:"donationId"`
 	IsEligible bool     `json:"isEligible"`
 	Reasons    []string `json:"reasons"`
+	DonorID    string   `json:"-"`
+	BloodType  string   `json:"-"`
+	ProductType string `json:"-"`
 }
 
 type HospitalRequest struct {
@@ -194,4 +198,21 @@ type UpdateDonorRequest struct {
 type DeviceTokenRequest struct {
 	QRToken     string `json:"qr_token"`
 	DeviceToken string `json:"device_token"`
+}
+
+type DonorAuthResponse struct {
+	Token string `json:"token"`
+	Donor
+}
+
+type Pagination struct {
+	Page       int `json:"page"`
+	Limit      int `json:"limit"`
+	Total      int `json:"total"`
+	TotalPages int `json:"total_pages"`
+}
+
+type DonationHistoryPage struct {
+	Items      []DonationRecord `json:"items"`
+	Pagination Pagination       `json:"pagination"`
 }

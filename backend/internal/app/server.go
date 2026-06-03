@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -87,6 +88,8 @@ func (a *App) routeMobile(w http.ResponseWriter, r *http.Request, path string) {
 		a.handleMobileLogin(w, r)
 	case r.Method == http.MethodPost && path == "/mobile/register":
 		a.handleMobileRegister(w, r)
+	case r.Method == http.MethodGet && path == "/mobile/history":
+		a.handleMobileHistory(w, r)
 	case r.Method == http.MethodGet && path == "/mobile/donor":
 		a.handleMobileGetDonor(w, r)
 	case r.Method == http.MethodGet && path == "/mobile/stock":
@@ -145,6 +148,8 @@ func (a *App) routeProtected(w http.ResponseWriter, r *http.Request, path string
 		a.handleCreateHospital(w, r)
 	case r.Method == http.MethodPut && len(segments) == 2 && segments[0] == "hospitals":
 		a.handleUpdateHospital(w, r, segments[1])
+	case r.Method == http.MethodDelete && len(segments) == 2 && segments[0] == "hospitals":
+		a.handleDeactivateHospital(w, r, segments[1])
 
 	default:
 		fail(w, http.StatusNotFound, "NOT_FOUND", "Endpoint tidak ditemukan.")
@@ -240,20 +245,29 @@ func (a *App) handleMobileLogin(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
-		LoginKey string `json:"loginKey"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		fail(w, http.StatusBadRequest, "BAD_REQUEST", "Body login tidak valid.")
 		return
 	}
-
-	key := input.LoginKey
-	if key == "" {
-		key = input.Email
+	if strings.TrimSpace(input.Email) == "" || strings.TrimSpace(input.Password) == "" {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "email dan password wajib diisi.")
+		return
 	}
 
-	donor, err := a.store.FindDonorByLogin(r.Context(), key)
-	a.respond(w, donor, err, http.StatusOK)
+	donor, passwordHash, err := a.store.FindDonorByLogin(r.Context(), input.Email)
+	if err != nil || !verifyPassword(passwordHash, input.Password) {
+		fail(w, http.StatusUnauthorized, "INVALID_CREDENTIALS", "Email atau password salah.")
+		return
+	}
+
+	token, err := signDonorToken(a.cfg.JWTSecret, donor, a.cfg.TokenTTL)
+	if err != nil {
+		a.serverError(w, err)
+		return
+	}
+
+	ok(w, DonorAuthResponse{Token: token, Donor: donor}, http.StatusOK)
 }
 
 func (a *App) handleMobileRegister(w http.ResponseWriter, r *http.Request) {
@@ -262,8 +276,59 @@ func (a *App) handleMobileRegister(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "BAD_REQUEST", "Body registrasi tidak valid.")
 		return
 	}
+	if len(strings.TrimSpace(input.Password)) < 8 {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "password minimal 8 karakter.")
+		return
+	}
 	donor, err := a.store.CreateDonor(r.Context(), input)
-	a.respond(w, donor, err, http.StatusCreated)
+	if err != nil {
+		a.respond(w, nil, err, http.StatusCreated)
+		return
+	}
+
+	token, err := signDonorToken(a.cfg.JWTSecret, donor, a.cfg.TokenTTL)
+	if err != nil {
+		a.serverError(w, err)
+		return
+	}
+
+	ok(w, DonorAuthResponse{Token: token, Donor: donor}, http.StatusCreated)
+}
+
+func (a *App) handleMobileHistory(w http.ResponseWriter, r *http.Request) {
+	donor, okAuth := a.requireDonor(w, r)
+	if !okAuth {
+		return
+	}
+
+	page, err := parsePositiveInt(r.URL.Query().Get("page"), 1)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "page harus berupa bilangan bulat positif.")
+		return
+	}
+	limit, err := parsePositiveInt(r.URL.Query().Get("limit"), 10)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "limit harus berupa bilangan bulat positif.")
+		return
+	}
+
+	startDate, err := parseHistoryDate(r.URL.Query().Get("start_date"))
+	if err != nil {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "start_date harus berformat YYYY-MM-DD.")
+		return
+	}
+	endDate, err := parseHistoryDate(r.URL.Query().Get("end_date"))
+	if err != nil {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "end_date harus berformat YYYY-MM-DD.")
+		return
+	}
+	if startDate != nil && endDate != nil && startDate.After(*endDate) {
+		fail(w, http.StatusBadRequest, "BAD_REQUEST", "start_date tidak boleh melebihi end_date.")
+		return
+	}
+
+	history, err := a.store.DonationHistoryPage(r.Context(), donor.ID, page, limit, startDate, endDate)
+	a.respond(w, history, err, http.StatusOK)
 }
 
 func (a *App) handleMobileGetDonor(w http.ResponseWriter, r *http.Request) {
@@ -459,17 +524,21 @@ func (a *App) handleCheckin(w http.ResponseWriter, r *http.Request) {
 	admin := adminFromContext(r.Context())
 	result, err := a.store.CheckinDonation(r.Context(), input, admin.ID)
 	if err == nil && result.IsEligible {
-		donor, donorErr := a.store.GetDonor(r.Context(), input.DonorUUID)
-		if donorErr == nil {
-			_, stockErr := a.store.UpdateStock(r.Context(), donor.BloodType, "WB", StockUpdateRequest{
-				Mode:      "add",
-				Quantity:  1,
-				Reference: result.DonationID,
-				Notes:     "auto update dari checkin donor",
-			}, admin.ID)
-			if stockErr != nil {
-				a.logger.Error("auto stock update after checkin failed", "error", stockErr, "donation_id", result.DonationID)
-			}
+		productType := "WB"
+		if result.ProductType != "" {
+			productType = result.ProductType
+		}
+		_, stockErr := a.store.UpdateStock(r.Context(), result.BloodType, productType, StockUpdateRequest{
+			Mode:      "add",
+			Quantity:  1,
+			Reference: result.DonationID,
+			Notes:     "auto update dari checkin donor",
+		}, admin.ID)
+		if stockErr != nil {
+			a.logger.Error("auto stock update after checkin failed", "error", stockErr, "donation_id", result.DonationID)
+		}
+		if notifyErr := a.store.SendDonationThankYouNotification(r.Context(), result.DonationID, result.DonorID, a.fcm); notifyErr != nil {
+			a.logger.Error("send donation thank you notification failed", "error", notifyErr, "donation_id", result.DonationID, "donor_id", result.DonorID)
 		}
 	}
 	a.respond(w, result, err, http.StatusOK)
@@ -479,7 +548,8 @@ func (a *App) handleListHospitals(w http.ResponseWriter, r *http.Request) {
 	if !a.requireRole(w, r, "SUPER_ADMIN", "OPERATOR") {
 		return
 	}
-	hospitals, err := a.store.ListHospitals(r.Context())
+	includeInactive := strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("include_inactive")), "true")
+	hospitals, err := a.store.ListHospitals(r.Context(), includeInactive)
 	a.respond(w, hospitals, err, http.StatusOK)
 }
 
@@ -507,6 +577,17 @@ func (a *App) handleUpdateHospital(w http.ResponseWriter, r *http.Request, id st
 	}
 	hospital, err := a.store.UpdateHospital(r.Context(), id, input)
 	a.respond(w, hospital, err, http.StatusOK)
+}
+
+func (a *App) handleDeactivateHospital(w http.ResponseWriter, r *http.Request, id string) {
+	if !a.requireRole(w, r, "SUPER_ADMIN", "OPERATOR") {
+		return
+	}
+	if err := a.store.DeactivateHospital(r.Context(), id); err != nil {
+		a.respond(w, nil, err, http.StatusOK)
+		return
+	}
+	okMessage(w, "hospital deactivated", http.StatusOK)
 }
 
 func (a *App) handleMobileUpdateDonor(w http.ResponseWriter, r *http.Request) {
@@ -553,10 +634,19 @@ func (a *App) handleCloseRequest(w http.ResponseWriter, r *http.Request, request
 	}
 	req, err := a.store.CloseRequest(r.Context(), requestID)
 	if err != nil {
-		a.serverError(w, err)
+		a.respond(w, nil, err, http.StatusOK)
 		return
 	}
 	ok(w, req, http.StatusOK)
+}
+
+func (a *App) requireDonor(w http.ResponseWriter, r *http.Request) (Donor, bool) {
+	donor, err := parseDonorToken(a.cfg.JWTSecret, bearerToken(r))
+	if err != nil {
+		fail(w, http.StatusUnauthorized, "UNAUTHORIZED", "Sesi donor tidak valid atau sudah kedaluwarsa.")
+		return Donor{}, false
+	}
+	return donor, true
 }
 
 func (a *App) requireRole(w http.ResponseWriter, r *http.Request, roles ...string) bool {
@@ -615,6 +705,32 @@ func splitPath(path string) []string {
 		segments = append(segments, value)
 	}
 	return segments
+}
+
+func parsePositiveInt(raw string, fallback int) (int, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback, nil
+	}
+
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 0, errors.New("invalid positive integer")
+	}
+	return value, nil
+}
+
+func parseHistoryDate(raw string) (*time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	parsed, err := time.Parse("2006-01-02", raw)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
 type broadcastLimiter struct {

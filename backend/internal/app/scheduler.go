@@ -24,8 +24,11 @@ func NewScheduler(store *Store, logger *slog.Logger) *Scheduler {
 }
 
 func (s *Scheduler) Start() {
-	s.wg.Add(1)
-	go s.runDaily()
+	s.logger.Info("scheduler started", "next_eligibility_run_at", nextMidnight(time.Now()).Format(time.RFC3339), "broadcast_interval", s.interval().String())
+
+	s.wg.Add(2)
+	go s.runEligibilityLoop()
+	go s.runBroadcastLoop()
 }
 
 func (s *Scheduler) Stop() {
@@ -35,44 +38,66 @@ func (s *Scheduler) Stop() {
 	s.wg.Wait()
 }
 
-func (s *Scheduler) runDaily() {
+func (s *Scheduler) runEligibilityLoop() {
 	defer s.wg.Done()
 
-	interval := s.interval()
-	s.runMaintenance()
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
 	for {
+		timer := time.NewTimer(time.Until(nextMidnight(time.Now())))
 		select {
-		case <-ticker.C:
-			s.runMaintenance()
+		case <-timer.C:
+			s.runEligibilityRefresh()
 		case <-s.done:
-			s.logger.Info("scheduler stopped")
+			timer.Stop()
+			s.logger.Info("scheduler stopped", "loop", "eligibility")
 			return
 		}
 	}
 }
 
-func (s *Scheduler) runMaintenance() {
-	donorCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	donorsUpdated, err := s.store.RefreshEligibility(donorCtx)
-	cancel()
+func (s *Scheduler) runBroadcastLoop() {
+	defer s.wg.Done()
+
+	s.runBroadcastExpiration()
+
+	ticker := time.NewTicker(s.interval())
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.runBroadcastExpiration()
+		case <-s.done:
+			s.logger.Info("scheduler stopped", "loop", "broadcasts")
+			return
+		}
+	}
+}
+
+func (s *Scheduler) runEligibilityRefresh() {
+	startedAt := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	updated, err := s.store.RefreshEligibility(ctx)
+	duration := time.Since(startedAt)
 	if err != nil {
-		s.logger.Error("refresh donor eligibility", "error", err)
-	} else {
-		s.logger.Info("refreshed donor eligibility", "donors_updated", donorsUpdated)
+		s.logger.Error("refresh donor eligibility", "error", err, "duration", duration.String())
+		return
 	}
 
-	broadcastCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	broadcastsExpired, err := s.store.ExpireBroadcasts(broadcastCtx)
-	cancel()
+	s.logger.Info("refreshed donor eligibility", "donors_updated", updated, "duration", duration.String())
+}
+
+func (s *Scheduler) runBroadcastExpiration() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	broadcastsExpired, err := s.store.ExpireBroadcasts(ctx)
 	if err != nil {
 		s.logger.Error("expire emergency broadcasts", "error", err)
-	} else {
-		s.logger.Info("expired emergency broadcasts", "broadcasts_expired", broadcastsExpired)
+		return
 	}
+	s.logger.Info("expired emergency broadcasts", "broadcasts_expired", broadcastsExpired)
 }
 
 func (s *Scheduler) interval() time.Duration {
@@ -80,4 +105,9 @@ func (s *Scheduler) interval() time.Duration {
 		return s.store.cfg.SchedulerInterval
 	}
 	return time.Hour
+}
+
+func nextMidnight(now time.Time) time.Time {
+	next := now.AddDate(0, 0, 1)
+	return time.Date(next.Year(), next.Month(), next.Day(), 0, 0, 0, 0, now.Location())
 }

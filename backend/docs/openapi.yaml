@@ -1,0 +1,263 @@
+openapi: 3.0.3
+info:
+  title: Bank Darah Backend API
+  version: "1.1.0"
+  description: Static API documentation for the backend endpoints added in this feature batch.
+servers:
+  - url: /api/v1
+paths:
+  /mobile/register:
+    post:
+      summary: Register donor mobile account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DonorRegisterRequest"
+      responses:
+        "201":
+          description: Donor created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DonorAuthEnvelope"
+  /mobile/login:
+    post:
+      summary: Login donor mobile account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DonorLoginRequest"
+      responses:
+        "200":
+          description: Donor authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DonorAuthEnvelope"
+        "401":
+          description: Invalid credentials
+  /mobile/history:
+    get:
+      summary: Get paginated donor donation history
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            default: 10
+        - in: query
+          name: start_date
+          schema:
+            type: string
+            format: date
+        - in: query
+          name: end_date
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Donation history page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DonationHistoryEnvelope"
+        "401":
+          description: Missing or invalid donor token
+  /hospitals:
+    get:
+      summary: List hospitals
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: include_inactive
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Hospitals list
+    post:
+      summary: Create hospital
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Hospital created
+  /hospitals/{id}:
+    delete:
+      summary: Soft deactivate hospital
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Hospital deactivated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessMessageEnvelope"
+        "400":
+          description: Hospital already inactive
+        "404":
+          description: Hospital not found
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Donor:
+      type: object
+      properties:
+        id:
+          type: string
+        uuid:
+          type: string
+        fullName:
+          type: string
+        phone:
+          type: string
+        email:
+          type: string
+        bloodType:
+          type: string
+        gender:
+          type: string
+        address:
+          type: string
+        distanceKm:
+          type: number
+        lastDonation:
+          type: string
+        nextEligible:
+          type: string
+        isEligible:
+          type: boolean
+        isActive:
+          type: boolean
+        donationHistory:
+          type: array
+          items:
+            $ref: "#/components/schemas/DonationRecord"
+    DonorRegisterRequest:
+      type: object
+      required: [fullName, email, password, phone, bloodType, gender, birthDate, address]
+      properties:
+        nik:
+          type: string
+        fullName:
+          type: string
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+        phone:
+          type: string
+        bloodType:
+          type: string
+        gender:
+          type: string
+        birthDate:
+          type: string
+          format: date
+        address:
+          type: string
+        latitude:
+          type: number
+        longitude:
+          type: number
+        deviceToken:
+          type: string
+    DonorLoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    DonorAuthEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          allOf:
+            - type: object
+              properties:
+                token:
+                  type: string
+            - $ref: "#/components/schemas/Donor"
+    DonationRecord:
+      type: object
+      properties:
+        id:
+          type: string
+        date:
+          type: string
+        location:
+          type: string
+        requestId:
+          type: string
+        bloodPressure:
+          type: string
+        hemoglobin:
+          type: number
+        weight:
+          type: number
+        status:
+          type: string
+    DonationHistoryEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+          properties:
+            items:
+              type: array
+              items:
+                $ref: "#/components/schemas/DonationRecord"
+            pagination:
+              type: object
+              properties:
+                page:
+                  type: integer
+                limit:
+                  type: integer
+                total:
+                  type: integer
+                total_pages:
+                  type: integer
+    SuccessMessageEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string

@@ -29,11 +29,20 @@ func NewStore(pool *pgxpool.Pool, cfg Config, qrCipher *QRCipher) *Store {
 func (s *Store) RefreshEligibility(ctx context.Context) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE users
-		SET is_eligible = TRUE, updated_at = NOW()
-		WHERE is_active = TRUE
-		  AND last_donation IS NOT NULL
-		  AND next_eligible <= CURRENT_DATE
-		  AND is_eligible = FALSE
+		SET is_eligible = desired.is_eligible,
+		    updated_at = NOW()
+		FROM (
+			SELECT id,
+			       CASE
+			         WHEN last_donation IS NULL THEN TRUE
+			         WHEN last_donation <= CURRENT_DATE - INTERVAL '60 days' THEN TRUE
+			         ELSE FALSE
+			       END AS is_eligible
+			FROM users
+			WHERE is_active = TRUE
+		) AS desired
+		WHERE users.id = desired.id
+		  AND users.is_eligible IS DISTINCT FROM desired.is_eligible
 	`)
 	if err != nil {
 		return 0, err
@@ -145,14 +154,23 @@ func (s *Store) UpdateStock(ctx context.Context, bloodType, productType string, 
 	return item, nil
 }
 
-func (s *Store) ListHospitals(ctx context.Context) ([]Hospital, error) {
-	rows, err := s.pool.Query(ctx, `
+func (s *Store) ListHospitals(ctx context.Context, includeInactive bool) ([]Hospital, error) {
+	query := `
 		SELECT id::TEXT, name, COALESCE(address, ''), COALESCE(latitude::DOUBLE PRECISION, 0),
 		       COALESCE(longitude::DOUBLE PRECISION, 0), COALESCE(pic_name, ''),
 		       COALESCE(pic_phone, ''), COALESCE(email, ''), is_active
 		FROM hospitals
+	`
+	if !includeInactive {
+		query += `
+		WHERE is_active = TRUE
+	`
+	}
+	query += `
 		ORDER BY created_at DESC, name ASC
-	`)
+	`
+
+	rows, err := s.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -214,6 +232,31 @@ func (s *Store) GetHospital(ctx context.Context, id string) (Hospital, error) {
 		return Hospital{}, errNotFound("rumah sakit tidak ditemukan")
 	}
 	return hospital, err
+}
+
+func (s *Store) DeactivateHospital(ctx context.Context, id string) error {
+	var isActive bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT is_active
+		FROM hospitals
+		WHERE id::TEXT = $1
+	`, id).Scan(&isActive)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errNotFound("rumah sakit tidak ditemukan")
+	}
+	if err != nil {
+		return err
+	}
+	if !isActive {
+		return errBadRequest("rumah sakit sudah nonaktif")
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		UPDATE hospitals
+		SET is_active = FALSE
+		WHERE id::TEXT = $1
+	`, id)
+	return err
 }
 
 func (s *Store) ListRequests(ctx context.Context) ([]EmergencyRequest, error) {
@@ -676,30 +719,31 @@ func (s *Store) GetDonor(ctx context.Context, key string) (Donor, error) {
 	return donor, nil
 }
 
-func (s *Store) FindDonorByLogin(ctx context.Context, loginKey string) (Donor, error) {
-	trimmed := strings.TrimSpace(loginKey)
+func (s *Store) FindDonorByLogin(ctx context.Context, email string) (Donor, string, error) {
+	trimmed := strings.TrimSpace(email)
 	if trimmed == "" {
-		return Donor{}, errBadRequest("kunci login tidak boleh kosong")
+		return Donor{}, "", errBadRequest("email tidak boleh kosong")
 	}
 
-	row := s.pool.QueryRow(ctx, donorSelectSQL()+`
-		WHERE (LOWER(u.email) = LOWER($3) OR u.phone = $3 OR u.nik = $3) AND u.is_active = TRUE
+	var passwordHash string
+	row := s.pool.QueryRow(ctx, donorSelectWithPasswordSQL()+`
+		WHERE LOWER(u.email) = LOWER($3) AND u.is_active = TRUE
 		LIMIT 1
 	`, s.cfg.PMILongitude, s.cfg.PMILatitude, trimmed)
-	donor, err := scanDonor(row)
+	donor, err := scanDonorWithPassword(row, &passwordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Donor{}, errNotFound("akun pendonor tidak ditemukan")
+		return Donor{}, "", errNotFound("akun pendonor tidak ditemukan")
 	}
 	if err != nil {
-		return Donor{}, err
+		return Donor{}, "", err
 	}
 
 	history, err := s.DonationHistory(ctx, donor.ID)
 	if err != nil {
-		return Donor{}, err
+		return Donor{}, "", err
 	}
 	donor.DonationHistory = history
-	return donor, nil
+	return donor, passwordHash, nil
 }
 
 func (s *Store) CreateDonor(ctx context.Context, input DonorCreateRequest) (Donor, error) {
@@ -719,6 +763,15 @@ func (s *Store) CreateDonor(ctx context.Context, input DonorCreateRequest) (Dono
 		input.Longitude = s.cfg.PMILongitude + 0.03
 	}
 
+	var passwordHash interface{}
+	if strings.TrimSpace(input.Password) != "" {
+		hashed, err := hashPassword(input.Password)
+		if err != nil {
+			return Donor{}, err
+		}
+		passwordHash = hashed
+	}
+
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return Donor{}, err
@@ -729,14 +782,14 @@ func (s *Store) CreateDonor(ctx context.Context, input DonorCreateRequest) (Dono
 	err = tx.QueryRow(ctx, `
 		INSERT INTO users (
 			qr_token, nik, full_name, email, phone, blood_type, birth_date, gender, address,
-			latitude, longitude, location, device_token, is_eligible, is_active
+			latitude, longitude, location, device_token, password_hash, is_eligible, is_active
 		)
 		VALUES (
 			'pending:' || gen_random_uuid()::TEXT, $1, $2, $3, $4, $5, $6::DATE, $7, $8,
-			$9::DECIMAL, $10::DECIMAL, ST_SetSRID(ST_MakePoint($10::DOUBLE PRECISION, $9::DOUBLE PRECISION), 4326)::geography, $11, TRUE, TRUE
+			$9::DECIMAL, $10::DECIMAL, ST_SetSRID(ST_MakePoint($10::DOUBLE PRECISION, $9::DOUBLE PRECISION), 4326)::geography, $11, $12, TRUE, TRUE
 		)
 		RETURNING id::TEXT
-	`, input.NIK, input.FullName, nullString(input.Email), input.Phone, input.BloodType, input.BirthDate, input.Gender, input.Address, input.Latitude, input.Longitude, nullString(input.DeviceToken)).Scan(&id)
+	`, input.NIK, input.FullName, nullString(input.Email), input.Phone, input.BloodType, input.BirthDate, input.Gender, input.Address, input.Latitude, input.Longitude, nullString(input.DeviceToken), passwordHash).Scan(&id)
 	if err != nil {
 		return Donor{}, err
 	}
@@ -906,6 +959,12 @@ func (s *Store) CloseRequest(ctx context.Context, requestID string) (EmergencyRe
 		return EmergencyRequest{}, errNotFound("permintaan tidak ditemukan")
 	}
 
+	if err := tx.Commit(ctx); err != nil {
+		return EmergencyRequest{}, err
+	}
+	return s.GetRequest(ctx, requestID)
+}
+
 func (s *Store) UpdateDeviceToken(ctx context.Context, qrToken, deviceToken string) (Donor, error) {
 	donor, err := s.activeDonorByQRToken(ctx, qrToken)
 	if err != nil {
@@ -924,13 +983,6 @@ func (s *Store) UpdateDeviceToken(ctx context.Context, qrToken, deviceToken stri
 	return s.GetDonor(ctx, donor.ID)
 }
 
-
-	if err := tx.Commit(ctx); err != nil {
-		return EmergencyRequest{}, err
-	}
-	return s.GetRequest(ctx, requestID)
-}
-
 func (s *Store) UpdateDonorStatus(ctx context.Context, id string, isActive bool) (Donor, error) {
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE users
@@ -947,16 +999,40 @@ func (s *Store) UpdateDonorStatus(ctx context.Context, id string, isActive bool)
 }
 
 func (s *Store) DonationHistory(ctx context.Context, donorID string) ([]DonationRecord, error) {
+	page, err := s.DonationHistoryPage(ctx, donorID, 1, 1000, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	return page.Items, nil
+}
+
+func (s *Store) DonationHistoryPage(ctx context.Context, donorID string, page, limit int, startDate, endDate *time.Time) (DonationHistoryPage, error) {
+	offset := (page - 1) * limit
+	var total int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM donation_history
+		WHERE donor_id::TEXT = $1
+		  AND ($2::DATE IS NULL OR donation_date >= $2::DATE)
+		  AND ($3::DATE IS NULL OR donation_date <= $3::DATE)
+	`, donorID, optionalDate(startDate), optionalDate(endDate)).Scan(&total)
+	if err != nil {
+		return DonationHistoryPage{}, err
+	}
+
 	rows, err := s.pool.Query(ctx, `
 		SELECT id::TEXT, to_char(donation_date, 'YYYY-MM-DD'), COALESCE(pmi_location, ''),
 		       COALESCE(request_id::TEXT, ''), COALESCE(blood_pressure, ''),
 		       COALESCE(hemoglobin::DOUBLE PRECISION, 0), COALESCE(weight::DOUBLE PRECISION, 0), status::TEXT
 		FROM donation_history
 		WHERE donor_id::TEXT = $1
+		  AND ($2::DATE IS NULL OR donation_date >= $2::DATE)
+		  AND ($3::DATE IS NULL OR donation_date <= $3::DATE)
 		ORDER BY donation_date DESC, created_at DESC
-	`, donorID)
+		LIMIT $4 OFFSET $5
+	`, donorID, optionalDate(startDate), optionalDate(endDate), limit, offset)
 	if err != nil {
-		return nil, err
+		return DonationHistoryPage{}, err
 	}
 	defer rows.Close()
 
@@ -973,11 +1049,27 @@ func (s *Store) DonationHistory(ctx context.Context, donorID string) ([]Donation
 			&record.Weight,
 			&record.Status,
 		); err != nil {
-			return nil, err
+			return DonationHistoryPage{}, err
 		}
 		records = append(records, record)
 	}
-	return records, rows.Err()
+	if err := rows.Err(); err != nil {
+		return DonationHistoryPage{}, err
+	}
+
+	totalPages := 0
+	if total > 0 {
+		totalPages = int(math.Ceil(float64(total) / float64(limit)))
+	}
+	return DonationHistoryPage{
+		Items: records,
+		Pagination: Pagination{
+			Page:       page,
+			Limit:      limit,
+			Total:      total,
+			TotalPages: totalPages,
+		},
+	}, nil
 }
 
 func (s *Store) CheckinDonation(ctx context.Context, input DonationCheckinRequest, adminID string) (DonationCheckinResult, error) {
@@ -1047,7 +1139,73 @@ func (s *Store) CheckinDonation(ctx context.Context, input DonationCheckinReques
 		_ = s.refreshBroadcastSummary(ctx, input.RequestID)
 	}
 
-	return DonationCheckinResult{DonationID: donationID, IsEligible: eligible, Reasons: reasons}, nil
+	productType := "WB"
+	if input.RequestID != "" {
+		_ = s.pool.QueryRow(ctx, `SELECT product_type FROM blood_requests WHERE id::TEXT = $1`, input.RequestID).Scan(&productType)
+	}
+
+	return DonationCheckinResult{
+		DonationID:  donationID,
+		IsEligible:  eligible,
+		Reasons:     reasons,
+		DonorID:     donor.ID,
+		BloodType:   donor.BloodType,
+		ProductType: productType,
+	}, nil
+}
+
+func (s *Store) SendDonationThankYouNotification(ctx context.Context, donationID, donorID string, fcm *FCMClient) error {
+	if fcm == nil {
+		return nil
+	}
+
+	const notificationType = "DONATION_THANK_YOU"
+
+	var logID string
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO notification_logs (donor_id, donation_id, type, sent_at)
+		VALUES ($1, $2, $3, NULL)
+		ON CONFLICT (donation_id, type) DO NOTHING
+		RETURNING id::TEXT
+	`, donorID, donationID, notificationType).Scan(&logID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	token, err := s.donorDeviceToken(ctx, donorID)
+	if err != nil {
+		_, _ = s.pool.Exec(ctx, `DELETE FROM notification_logs WHERE id::TEXT = $1`, logID)
+		return err
+	}
+	if strings.TrimSpace(token) == "" {
+		_, _ = s.pool.Exec(ctx, `DELETE FROM notification_logs WHERE id::TEXT = $1`, logID)
+		return nil
+	}
+
+	if err := fcm.SendNotification(
+		ctx,
+		token,
+		"Terima Kasih ❤️",
+		"Terima kasih telah mendonorkan darah Anda hari ini. Donasi Anda sangat berarti bagi mereka yang membutuhkan.",
+		map[string]string{
+			"type":        "donation_thank_you",
+			"donation_id": donationID,
+			"donor_id":    donorID,
+		},
+	); err != nil {
+		_, _ = s.pool.Exec(ctx, `DELETE FROM notification_logs WHERE id::TEXT = $1`, logID)
+		return err
+	}
+
+	_, err = s.pool.Exec(ctx, `
+		UPDATE notification_logs
+		SET sent_at = NOW()
+		WHERE id::TEXT = $1
+	`, logID)
+	return err
 }
 
 func (s *Store) findOrCreateHospital(ctx context.Context, input EmergencyCreateRequest) (string, error) {
@@ -1258,6 +1416,31 @@ func scanDonor(row pgx.Row) (Donor, error) {
 	return donor, err
 }
 
+func scanDonorWithPassword(row pgx.Row, passwordHash *string) (Donor, error) {
+	var donor Donor
+	err := row.Scan(
+		&donor.ID,
+		&donor.UUID,
+		&donor.FullName,
+		&donor.Phone,
+		&donor.Email,
+		&donor.BloodType,
+		&donor.Gender,
+		&donor.Address,
+		&donor.DistanceKm,
+		&donor.LastDonation,
+		&donor.NextEligible,
+		&donor.IsEligible,
+		&donor.IsActive,
+		passwordHash,
+	)
+	if math.IsNaN(donor.DistanceKm) {
+		donor.DistanceKm = 0
+	}
+	donor.UUID = publicQRToken(donor.UUID)
+	return donor, err
+}
+
 func scanLiveResponse(row pgx.Row) (LiveResponse, error) {
 	var response LiveResponse
 	err := row.Scan(
@@ -1328,6 +1511,26 @@ func donorSelectSQL() string {
 	`
 }
 
+func donorSelectWithPasswordSQL() string {
+	return `
+		SELECT u.id::TEXT,
+		       u.qr_token,
+		       u.full_name,
+		       u.phone,
+		       COALESCE(u.email, ''),
+		       u.blood_type,
+		       u.gender,
+		       COALESCE(u.address, ''),
+		       COALESCE(ROUND((ST_Distance(u.location, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography) / 1000)::NUMERIC, 1)::DOUBLE PRECISION, 0) AS distance_km,
+		       COALESCE(to_char(u.last_donation, 'YYYY-MM-DD'), ''),
+		       COALESCE(to_char(u.next_eligible, 'YYYY-MM-DD'), ''),
+		       u.is_eligible,
+		       u.is_active,
+		       COALESCE(u.password_hash, '')
+		FROM users u
+	`
+}
+
 func validateMedical(donor Donor, input DonationCheckinRequest) (bool, []string) {
 	var reasons []string
 	hbMinimum := 13.0
@@ -1373,6 +1576,26 @@ func nullString(value string) interface{} {
 		return nil
 	}
 	return trimmed
+}
+
+func optionalDate(value *time.Time) interface{} {
+	if value == nil {
+		return nil
+	}
+	return value.Format("2006-01-02")
+}
+
+func (s *Store) donorDeviceToken(ctx context.Context, donorID string) (string, error) {
+	var deviceToken string
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE(device_token, '')
+		FROM users
+		WHERE id::TEXT = $1
+	`, donorID).Scan(&deviceToken)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", errNotFound("pendonor tidak ditemukan")
+	}
+	return deviceToken, err
 }
 
 func generateNIK() string {
