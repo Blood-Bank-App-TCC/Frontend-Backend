@@ -2,6 +2,7 @@ import { Ambulance } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { bankDarahController } from "../../controllers/bankDarahController";
+import { apiErrorMessage } from "../../models/apiClient";
 import type { BloodType, ProductType, UrgencyLevel } from "../../models/types";
 import { bloodTypes, productTypes } from "../../models/status";
 import PageHeader from "../layout/PageHeader";
@@ -19,17 +20,26 @@ export default function EmergencyNewPage() {
     notes: "Perdarahan pascaoperasi, butuh donor secepatnya.",
   });
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    setError("");
     setLoading(true);
-    const request = await bankDarahController.createRequest(form);
-    navigate(`/emergency/${request.id}/broadcast`);
+    try {
+      const request = await bankDarahController.createRequest(form);
+      navigate(`/emergency/${request.id}/broadcast`);
+    } catch (err) {
+      setError(apiErrorMessage(err, "Permintaan darurat gagal dibuat."));
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
     <>
       <PageHeader eyebrow="Emergency request" title="Form Permintaan Darurat" />
+      {error && <p className="alert danger">{error}</p>}
       <form className="panel form-grid" onSubmit={submit}>
         <label>
           Nama Rumah Sakit

@@ -888,18 +888,38 @@ func (s *Store) UpdateDonorByQRToken(ctx context.Context, qrToken string, input 
 }
 
 func (s *Store) CloseRequest(ctx context.Context, requestID string) (EmergencyRequest, error) {
-	_, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return EmergencyRequest{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx, `
 		UPDATE blood_requests
-		SET status = 'FULFILLED', fulfilled_at = NOW()
+		SET status = 'CLOSED', fulfilled_at = NOW()
 		WHERE id::TEXT = $1
 	`, requestID)
 	if err != nil {
 		return EmergencyRequest{}, err
 	}
+	if tag.RowsAffected() == 0 {
+		return EmergencyRequest{}, errNotFound("permintaan tidak ditemukan")
+	}
+
+	_, err = tx.Exec(ctx, `
+		UPDATE emergency_broadcasts
+		SET status = 'CLOSED', closed_at = NOW()
+		WHERE request_id::TEXT = $1 AND status = 'ACTIVE'
+	`, requestID)
+	if err != nil {
+		return EmergencyRequest{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return EmergencyRequest{}, err
+	}
 	return s.GetRequest(ctx, requestID)
 }
-
-
 
 func (s *Store) UpdateDonorStatus(ctx context.Context, id string, isActive bool) (Donor, error) {
 	tag, err := s.pool.Exec(ctx, `

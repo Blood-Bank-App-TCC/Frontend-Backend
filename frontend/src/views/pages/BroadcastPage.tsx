@@ -1,8 +1,8 @@
-import { AxiosError } from "axios";
 import { Siren } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { bankDarahController } from "../../controllers/bankDarahController";
+import { apiErrorMessage } from "../../models/apiClient";
 import type { Donor, EmergencyRequest } from "../../models/types";
 import { DonorTable } from "../components/DataTables";
 import Loading from "../components/Loading";
@@ -18,10 +18,13 @@ export default function BroadcastPage() {
   const [sending, setSending] = useState(false);
 
   useEffect(() => {
-    bankDarahController.eligibleDonors(id).then((data) => {
-      setRequest(data.request);
-      setDonors(data.donors);
-    });
+    bankDarahController
+      .eligibleDonors(id)
+      .then((data) => {
+        setRequest(data.request);
+        setDonors(data.donors);
+      })
+      .catch((err) => setError(apiErrorMessage(err, "Donor eligible gagal dimuat.")));
   }, [id]);
 
   async function sendBroadcast() {
@@ -31,13 +34,13 @@ export default function BroadcastPage() {
       await bankDarahController.broadcast(id);
       navigate(`/emergency/${id}/monitor`);
     } catch (err) {
-      const axiosError = err as AxiosError<{ message?: string }>;
-      setError(axiosError.response?.data?.message ?? "Broadcast gagal dikirim.");
+      setError(apiErrorMessage(err, "Broadcast gagal dikirim."));
     } finally {
       setSending(false);
     }
   }
 
+  if (!request && error) return <p className="alert danger">{error}</p>;
   if (!request) return <Loading title="Menyiapkan donor eligible" />;
 
   return (

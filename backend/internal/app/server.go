@@ -160,6 +160,7 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	ok(w, map[string]interface{}{
 		"status":    "ok",
+		"backend":   "ok",
 		"database":  dbStatus,
 		"timestamp": time.Now().UTC(),
 	}, http.StatusOK)
@@ -432,7 +433,7 @@ func (a *App) handleUpdateDonor(w http.ResponseWriter, r *http.Request, id strin
 }
 
 func (a *App) handleUpdateDonorStatus(w http.ResponseWriter, r *http.Request, id string) {
-	if !a.requireRole(w, r, "SUPER_ADMIN") {
+	if !a.requireRole(w, r, "SUPER_ADMIN", "OPERATOR") {
 		return
 	}
 	var input DonorStatusRequest

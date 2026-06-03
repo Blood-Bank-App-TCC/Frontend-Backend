@@ -1,5 +1,7 @@
 import { Activity, BarChart3, Building2, Home, LogOut, PackagePlus, QrCode, ShieldCheck, Siren, Users } from "lucide-react";
+import { useEffect } from "react";
 import { Link, NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { bankDarahController } from "../../controllers/bankDarahController";
 import { useAuthStore } from "../../models/authStore";
 import BroadcastPage from "../pages/BroadcastPage";
 import CheckinPage from "../pages/CheckinPage";
@@ -23,8 +25,15 @@ const navItems = [
 ];
 
 export default function AppShell() {
+  const token = useAuthStore((state) => state.token);
   const user = useAuthStore((state) => state.user);
+  const setSession = useAuthStore((state) => state.setSession);
   const clearSession = useAuthStore((state) => state.clearSession);
+
+  useEffect(() => {
+    if (!token) return;
+    bankDarahController.me().then((admin) => setSession(token, admin)).catch(clearSession);
+  }, [clearSession, setSession, token]);
 
   return (
     <div className="app-shell">

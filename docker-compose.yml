@@ -24,12 +24,14 @@ services:
       PORT: 8080
       DATABASE_URL: postgres://bank_darah:bank_darah@postgres:5432/bank_darah?sslmode=disable
       JWT_SECRET: dev-bank-darah-secret-change-me
+      QR_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
       AUTH_REQUIRED: "true"
       PMI_NAME: PMI Kota Yogyakarta
       PMI_LOCATION: UDD PMI Kota Yogyakarta
       PMI_LATITUDE: -7.7839
       PMI_LONGITUDE: 110.3798
       ELIGIBLE_RADIUS_KM: 10
+      DEMO_MODE: "true"
     ports:
       - "8080:8080"
     depends_on:
@@ -41,7 +43,7 @@ services:
       context: ./frontend
     container_name: bank-darah-frontend
     ports:
-      - "5173:80"
+      - "5173:5173"
     depends_on:
       - backend
 

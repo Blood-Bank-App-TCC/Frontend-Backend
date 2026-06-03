@@ -1,6 +1,7 @@
 import { ShieldCheck } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { bankDarahController } from "../../controllers/bankDarahController";
+import { apiErrorMessage } from "../../models/apiClient";
 import type { Donor } from "../../models/types";
 import { formatDate } from "../../models/status";
 import QRScanner from "../components/QRScanner";
@@ -12,10 +13,13 @@ export default function CheckinPage() {
   const [scanError, setScanError] = useState("");
   const [form, setForm] = useState({ systolic: 122, diastolic: 80, hemoglobin: 13.4, weight: 62, requestId: "" });
   const [result, setResult] = useState<{ isEligible: boolean; reasons: string[] } | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   async function handleScan(value: string) {
     setScanError("");
     setResult(null);
+    setSubmitError("");
     try {
       const data = await bankDarahController.donor(value);
       setDonor(data);
@@ -28,8 +32,18 @@ export default function CheckinPage() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!donor) return;
-    const data = await bankDarahController.checkin({ donorUuid: donor.uuid, ...form });
-    setResult(data);
+    setSaving(true);
+    setSubmitError("");
+    setResult(null);
+    try {
+      const data = await bankDarahController.checkin({ donorUuid: donor.uuid, ...form });
+      setResult(data);
+      setDonor(await bankDarahController.donor(donor.uuid));
+    } catch (err) {
+      setSubmitError(apiErrorMessage(err, "Check-in donor gagal diproses."));
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -93,11 +107,12 @@ export default function CheckinPage() {
             <input value={form.requestId} onChange={(event) => setForm({ ...form, requestId: event.target.value })} placeholder="Opsional" />
           </label>
           <div className="form-actions span-2">
-            <button className="btn primary" type="submit">
+            <button className="btn primary" type="submit" disabled={saving}>
               <ShieldCheck size={18} />
-              Konfirmasi Check-in
+              {saving ? "Memproses..." : "Konfirmasi Check-in"}
             </button>
           </div>
+          {submitError && <div className="alert danger span-2">{submitError}</div>}
           {result && (
             <div className={`alert ${result.isEligible ? "success" : "danger"} span-2`}>
               {result.isEligible ? "Donor lolos verifikasi medis." : result.reasons.join(", ")}

@@ -2,6 +2,7 @@ import { Siren } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { bankDarahController } from "../../controllers/bankDarahController";
+import { apiErrorMessage } from "../../models/apiClient";
 import type { BloodStock, EmergencyRequest } from "../../models/types";
 import { bloodTypes, stockLevel } from "../../models/status";
 import BloodTypeCard from "../components/BloodTypeCard";
@@ -12,10 +13,15 @@ import PageHeader from "../layout/PageHeader";
 export default function DashboardPage() {
   const [stock, setStock] = useState<BloodStock[]>([]);
   const [requests, setRequests] = useState<EmergencyRequest[]>([]);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    bankDarahController.stock().then(setStock);
-    bankDarahController.requests().then(setRequests);
+    Promise.all([bankDarahController.stock(), bankDarahController.requests()])
+      .then(([stockData, requestData]) => {
+        setStock(stockData);
+        setRequests(requestData);
+      })
+      .catch((err) => setError(apiErrorMessage(err, "Dashboard gagal memuat data backend.")));
   }, []);
 
   const grouped = useMemo(
@@ -42,6 +48,7 @@ export default function DashboardPage() {
           </Link>
         }
       />
+      {error && <p className="alert danger">{error}</p>}
       <section className="metric-grid">
         <Metric label="Total Kantong" value={stock.reduce((sum, item) => sum + item.quantity, 0)} tone="info" />
         <Metric label="Stok Kritis" value={critical} tone="danger" />

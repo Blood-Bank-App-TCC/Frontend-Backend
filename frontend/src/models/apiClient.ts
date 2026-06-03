@@ -26,6 +26,13 @@ api.interceptors.request.use((config) => {
 
 const unwrap = <T>(response: AxiosResponse<ApiEnvelope<T>>) => response.data.data;
 
+export function apiErrorMessage(error: unknown, fallback: string) {
+  if (axios.isAxiosError<{ message?: string }>(error)) {
+    return error.response?.data?.message ?? fallback;
+  }
+  return fallback;
+}
+
 export const endpoints = {
   login: async (username: string, password: string) =>
     unwrap(
@@ -36,6 +43,7 @@ export const endpoints = {
         }>
       >("/auth/admin/login", { username, password }),
     ),
+  me: async () => unwrap(await api.get<ApiEnvelope<AdminUser>>("/auth/me")),
   stock: async () => unwrap(await api.get<ApiEnvelope<BloodStock[]>>("/stock")),
   updateStock: async (bloodType: string, productType: string, payload: unknown) =>
     unwrap(
@@ -69,6 +77,8 @@ export const endpoints = {
     ),
   liveResponses: async (id: string) =>
     unwrap(await api.get<ApiEnvelope<LiveResponse[]>>(`/emergency/requests/${id}/live-responses`)),
+  closeRequest: async (id: string) =>
+    unwrap(await api.put<ApiEnvelope<EmergencyRequest>>(`/emergency/requests/${id}/close`)),
   donors: async (search = "") => unwrap(await api.get<ApiEnvelope<Donor[]>>("/donors", { params: { search } })),
   donor: async (uuid: string) => unwrap(await api.get<ApiEnvelope<Donor>>(`/donors/${encodeURIComponent(uuid)}`)),
   createDonor: async (payload: unknown) => unwrap(await api.post<ApiEnvelope<Donor>>("/donors", payload)),

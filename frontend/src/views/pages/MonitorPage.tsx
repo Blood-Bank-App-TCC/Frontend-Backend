@@ -1,6 +1,8 @@
+import { CheckCircle2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { bankDarahController } from "../../controllers/bankDarahController";
+import { apiErrorMessage } from "../../models/apiClient";
 import type { EmergencyRequest, LiveResponse } from "../../models/types";
 import { formatDateTime } from "../../models/status";
 import Metric from "../components/Metric";
@@ -11,16 +13,28 @@ export default function MonitorPage() {
   const { id = "" } = useParams();
   const [responses, setResponses] = useState<LiveResponse[]>([]);
   const [requests, setRequests] = useState<EmergencyRequest[]>([]);
+  const [closing, setClosing] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function loadRequests() {
+    setRequests(await bankDarahController.requests());
+  }
 
   useEffect(() => {
-    bankDarahController.requests().then(setRequests);
-    const load = () => bankDarahController.liveResponses(id).then(setResponses);
+    loadRequests().catch((err) => setError(apiErrorMessage(err, "Data request gagal dimuat.")));
+    const load = () =>
+      bankDarahController
+        .liveResponses(id)
+        .then(setResponses)
+        .catch((err) => setError(apiErrorMessage(err, "Respons pendonor gagal dimuat.")));
     load();
     const timer = window.setInterval(load, 2500);
     return () => window.clearInterval(timer);
   }, [id]);
 
   const request = requests.find((item) => item.id === id);
+  const canClose = request?.status === "ACTIVE" || request?.status === "PENDING";
   const counts = {
     accepted: responses.filter((item) => item.status === "ACCEPTED").length,
     way: responses.filter((item) => item.status === "ON_THE_WAY").length,
@@ -28,9 +42,57 @@ export default function MonitorPage() {
     declined: responses.filter((item) => item.status === "DECLINED").length,
   };
 
+  async function closeRequest() {
+    setClosing(true);
+    setError("");
+    setMessage("");
+    try {
+      const closed = await bankDarahController.closeRequest(id);
+      setRequests((items) => items.map((item) => (item.id === closed.id ? closed : item)));
+      setMessage("Broadcast dan request berhasil ditutup.");
+    } catch (err) {
+      setError(apiErrorMessage(err, "Request gagal ditutup."));
+    } finally {
+      setClosing(false);
+    }
+  }
+
   return (
     <>
-      <PageHeader eyebrow="Live response dashboard" title={request ? `Monitor ${request.hospitalName}` : "Monitor Broadcast"} />
+      <PageHeader
+        eyebrow="Live response dashboard"
+        title={request ? `Monitor ${request.hospitalName}` : "Monitor Broadcast"}
+        action={
+          <button className="btn danger" disabled={!canClose || closing} onClick={closeRequest} type="button">
+            <CheckCircle2 size={18} />
+            {closing ? "Menutup..." : "Tutup & Selesaikan"}
+          </button>
+        }
+      />
+      {error && <p className="alert danger">{error}</p>}
+      {message && <p className="alert success">{message}</p>}
+      {request && (
+        <section className="emergency-summary">
+          <div>
+            <span>Status</span>
+            <strong>{request.status}</strong>
+          </div>
+          <div>
+            <span>Kebutuhan</span>
+            <strong>{request.quantityNeeded} kantong</strong>
+          </div>
+          <div>
+            <span>Golongan</span>
+            <strong>
+              {request.bloodType} / {request.productType}
+            </strong>
+          </div>
+          <div>
+            <span>Broadcast</span>
+            <strong>{request.broadcastId || "-"}</strong>
+          </div>
+        </section>
+      )}
       <section className="metric-grid">
         <Metric label="Siap Donor" value={counts.accepted} tone="success" />
         <Metric label="Menuju PMI" value={counts.way} tone="info" />
