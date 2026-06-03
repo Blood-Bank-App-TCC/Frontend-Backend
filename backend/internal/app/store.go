@@ -63,11 +63,20 @@ func (s *Store) FindAdminByUsername(ctx context.Context, username string) (Admin
 
 func (s *Store) ListStock(ctx context.Context) ([]BloodStock, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT id::TEXT, blood_type, product_type, quantity, safe_threshold, critical_threshold, updated_at
-		FROM blood_stock
+		SELECT bs.id::TEXT, bs.blood_type, bs.product_type, bs.quantity, bs.safe_threshold, bs.critical_threshold,
+		       COALESCE(NULLIF(tx.notes, ''), NULLIF(tx.reference, ''), '') AS description,
+		       bs.updated_at
+		FROM blood_stock bs
+		LEFT JOIN LATERAL (
+			SELECT reference, notes
+			FROM stock_transactions st
+			WHERE st.blood_type = bs.blood_type AND st.product_type = bs.product_type
+			ORDER BY st.created_at DESC
+			LIMIT 1
+		) tx ON TRUE
 		ORDER BY
-			array_position(ARRAY['A+','A-','B+','B-','O+','O-','AB+','AB-'], blood_type),
-			array_position(ARRAY['WB','PRC','FFP','THROMBOCYTE'], product_type)
+			array_position(ARRAY['A+','A-','B+','B-','O+','O-','AB+','AB-'], bs.blood_type),
+			array_position(ARRAY['WB','PRC','FFP','THROMBOCYTE'], bs.product_type)
 	`)
 	if err != nil {
 		return nil, err
@@ -86,14 +95,22 @@ func (s *Store) ListStock(ctx context.Context) ([]BloodStock, error) {
 }
 
 func (s *Store) UpdateStock(ctx context.Context, bloodType, productType string, input StockUpdateRequest, adminID string) (BloodStock, error) {
-	if input.Quantity < 0 {
-		return BloodStock{}, errBadRequest("quantity tidak boleh negatif")
+	if input.Quantity < 1 {
+		return BloodStock{}, errBadRequest("quantity harus lebih dari 0")
 	}
-	if input.Mode == "" {
-		input.Mode = "add"
-	}
-	if input.Mode != "add" && input.Mode != "subtract" && input.Mode != "set" {
+	input.Mode = strings.TrimSpace(input.Mode)
+	if input.Mode != "add" && input.Mode != "subtract" {
 		return BloodStock{}, errBadRequest("mode stok tidak valid")
+	}
+	description := strings.TrimSpace(input.Keterangan)
+	if description == "" {
+		description = strings.TrimSpace(input.Notes)
+	}
+	if description == "" {
+		description = strings.TrimSpace(input.Reference)
+	}
+	if description == "" {
+		return BloodStock{}, errBadRequest("keterangan stok wajib diisi")
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -102,30 +119,42 @@ func (s *Store) UpdateStock(ctx context.Context, bloodType, productType string, 
 	}
 	defer tx.Rollback(ctx)
 
-	var item BloodStock
-	var updateSQL string
-	switch input.Mode {
-	case "set":
-		updateSQL = `
-			UPDATE blood_stock SET quantity = $3, updated_at = NOW()
-			WHERE blood_type = $1 AND product_type = $2
-			RETURNING id::TEXT, blood_type, product_type, quantity, safe_threshold, critical_threshold, updated_at
-		`
-	case "subtract":
-		updateSQL = `
-			UPDATE blood_stock SET quantity = GREATEST(0, quantity - $3), updated_at = NOW()
-			WHERE blood_type = $1 AND product_type = $2
-			RETURNING id::TEXT, blood_type, product_type, quantity, safe_threshold, critical_threshold, updated_at
-		`
-	default:
-		updateSQL = `
-			UPDATE blood_stock SET quantity = quantity + $3, updated_at = NOW()
-			WHERE blood_type = $1 AND product_type = $2
-			RETURNING id::TEXT, blood_type, product_type, quantity, safe_threshold, critical_threshold, updated_at
-		`
+	var current BloodStock
+	if err := tx.QueryRow(ctx, `
+		SELECT id::TEXT, blood_type, product_type, quantity, safe_threshold, critical_threshold, updated_at
+		FROM blood_stock
+		WHERE blood_type = $1 AND product_type = $2
+		FOR UPDATE
+	`, bloodType, productType).Scan(
+		&current.ID,
+		&current.BloodType,
+		&current.ProductType,
+		&current.Quantity,
+		&current.SafeThreshold,
+		&current.CriticalThreshold,
+		&current.UpdatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return BloodStock{}, errNotFound("stok tidak ditemukan")
+		}
+		return BloodStock{}, err
 	}
 
-	if err := tx.QueryRow(ctx, updateSQL, bloodType, productType, input.Quantity).Scan(
+	nextQuantity := current.Quantity + input.Quantity
+	if input.Mode == "subtract" {
+		if input.Quantity > current.Quantity {
+			return BloodStock{}, errBadRequest(fmt.Sprintf("stok %s %s hanya tersedia %d kantong, tidak bisa dikurangi %d", current.BloodType, current.ProductType, current.Quantity, input.Quantity))
+		}
+		nextQuantity = current.Quantity - input.Quantity
+	}
+
+	var item BloodStock
+	if err := tx.QueryRow(ctx, `
+		UPDATE blood_stock
+		SET quantity = $3, updated_at = NOW()
+		WHERE blood_type = $1 AND product_type = $2
+		RETURNING id::TEXT, blood_type, product_type, quantity, safe_threshold, critical_threshold, updated_at
+	`, bloodType, productType, nextQuantity).Scan(
 		&item.ID,
 		&item.BloodType,
 		&item.ProductType,
@@ -143,10 +172,11 @@ func (s *Store) UpdateStock(ctx context.Context, bloodType, productType string, 
 	_, err = tx.Exec(ctx, `
 		INSERT INTO stock_transactions (blood_type, product_type, quantity, mode, reference, notes, admin_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)
-	`, bloodType, productType, input.Quantity, input.Mode, nullString(input.Reference), nullString(input.Notes), nullString(adminID))
+	`, bloodType, productType, input.Quantity, input.Mode, nullString(description), nullString(description), nullString(adminID))
 	if err != nil {
 		return BloodStock{}, err
 	}
+	item.Description = description
 
 	if err := tx.Commit(ctx); err != nil {
 		return BloodStock{}, err
@@ -719,6 +749,59 @@ func (s *Store) GetDonor(ctx context.Context, key string) (Donor, error) {
 	return donor, nil
 }
 
+func (s *Store) CheckinRequestsForDonor(ctx context.Context, key string) ([]DonorCheckinRequest, error) {
+	donor, err := s.GetDonor(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT br.id::TEXT,
+		       COALESCE(h.name, ''),
+		       COALESCE(br.requested_by, h.pic_name, ''),
+		       COALESCE(h.pic_phone, ''),
+		       br.blood_type,
+		       br.product_type,
+		       br.quantity_needed,
+		       br.urgency_level::TEXT,
+		       COALESCE(br.notes, ''),
+		       br.status::TEXT,
+		       COALESCE(br.broadcast_id, ''),
+		       br.eligible_count,
+		       br.created_at,
+		       br.broadcast_sent_at,
+		       br.fulfilled_at,
+		       lr.status::TEXT,
+		       COALESCE(lr.response_at, lr.created_at)
+		FROM blood_requests br
+		LEFT JOIN hospitals h ON h.id = br.hospital_id
+		JOIN emergency_broadcasts eb ON eb.broadcast_id = br.broadcast_id AND eb.request_id = br.id
+		JOIN live_responses lr ON lr.broadcast_id = eb.broadcast_id AND lr.request_id = br.id
+		WHERE br.status = 'ACTIVE'
+		  AND eb.status = 'ACTIVE'
+		  AND lr.donor_id::TEXT = $1
+		  AND lr.status IN ('ACCEPTED', 'ON_THE_WAY')
+		ORDER BY
+		  CASE WHEN lr.status = 'ON_THE_WAY' THEN 0 ELSE 1 END,
+		  COALESCE(lr.response_at, lr.created_at) DESC,
+		  br.created_at DESC
+	`, donor.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	requests := make([]DonorCheckinRequest, 0)
+	for rows.Next() {
+		item, err := scanDonorCheckinRequest(rows)
+		if err != nil {
+			return nil, err
+		}
+		requests = append(requests, item)
+	}
+	return requests, rows.Err()
+}
+
 func (s *Store) FindDonorByLogin(ctx context.Context, email string) (Donor, string, error) {
 	trimmed := strings.TrimSpace(email)
 	if trimmed == "" {
@@ -1080,6 +1163,10 @@ func (s *Store) CheckinDonation(ctx context.Context, input DonationCheckinReques
 	if err != nil {
 		return DonationCheckinResult{}, err
 	}
+	requestID := strings.TrimSpace(input.RequestID)
+	if requestID == "" {
+		requestID, _ = s.activeRequestIDForDonor(ctx, donor.ID)
+	}
 
 	eligible, reasons := validateMedical(donor, input)
 	status := "COMPLETED"
@@ -1093,6 +1180,34 @@ func (s *Store) CheckinDonation(ctx context.Context, input DonationCheckinReques
 	}
 	defer tx.Rollback(ctx)
 
+	if requestID != "" {
+		var responseStatus string
+		err = tx.QueryRow(ctx, `
+			SELECT lr.status::TEXT
+			FROM live_responses lr
+			JOIN emergency_broadcasts eb ON eb.broadcast_id = lr.broadcast_id
+			WHERE lr.request_id::TEXT = $1
+			  AND lr.donor_id::TEXT = $2
+			  AND eb.status = 'ACTIVE'
+			FOR UPDATE OF lr
+		`, requestID, donor.ID).Scan(&responseStatus)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return DonationCheckinResult{}, errBadRequest("pendonor tidak termasuk request aktif yang dipilih")
+		}
+		if err != nil {
+			return DonationCheckinResult{}, err
+		}
+		switch responseStatus {
+		case "ACCEPTED", "ON_THE_WAY":
+		case "CHECKED_IN":
+			return DonationCheckinResult{}, errBadRequest("pendonor sudah selesai check-in untuk request ini")
+		case "DECLINED":
+			return DonationCheckinResult{}, errBadRequest("pendonor sudah menolak request ini")
+		default:
+			return DonationCheckinResult{}, errBadRequest("pendonor belum merespons siap donor untuk request ini")
+		}
+	}
+
 	var donationID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO donation_history (
@@ -1101,7 +1216,7 @@ func (s *Store) CheckinDonation(ctx context.Context, input DonationCheckinReques
 		)
 		VALUES ($1, $2, CURRENT_DATE, $3, $4, $5, $6, $7, $8, $9, $10)
 		RETURNING id::TEXT
-	`, donor.ID, nullString(input.RequestID), s.cfg.PMILocation, fmt.Sprintf("%d/%d", input.Systolic, input.Diastolic),
+	`, donor.ID, nullString(requestID), s.cfg.PMILocation, fmt.Sprintf("%d/%d", input.Systolic, input.Diastolic),
 		input.Hemoglobin, input.Weight, eligible, strings.Join(reasons, ", "), status, nullString(adminID)).Scan(&donationID)
 	if err != nil {
 		return DonationCheckinResult{}, err
@@ -1118,14 +1233,18 @@ func (s *Store) CheckinDonation(ctx context.Context, input DonationCheckinReques
 		}
 	}
 
-	if input.RequestID != "" {
+	if requestID != "" {
+		responseStatus := "CHECKED_IN"
+		if !eligible {
+			responseStatus = "DECLINED"
+		}
 		_, err = tx.Exec(ctx, `
 			UPDATE live_responses
-			SET status = 'CHECKED_IN',
-			    checkin_at = NOW(),
+			SET status = $3::response_status_enum,
+			    checkin_at = CASE WHEN $3::response_status_enum = 'CHECKED_IN' THEN NOW() ELSE checkin_at END,
 			    response_at = COALESCE(response_at, NOW())
 			WHERE request_id::TEXT = $1 AND donor_id::TEXT = $2
-		`, input.RequestID, donor.ID)
+		`, requestID, donor.ID, responseStatus)
 		if err != nil {
 			return DonationCheckinResult{}, err
 		}
@@ -1135,13 +1254,13 @@ func (s *Store) CheckinDonation(ctx context.Context, input DonationCheckinReques
 		return DonationCheckinResult{}, err
 	}
 
-	if input.RequestID != "" {
-		_ = s.refreshBroadcastSummary(ctx, input.RequestID)
+	if requestID != "" {
+		_ = s.refreshBroadcastSummary(ctx, requestID)
 	}
 
 	productType := "WB"
-	if input.RequestID != "" {
-		_ = s.pool.QueryRow(ctx, `SELECT product_type FROM blood_requests WHERE id::TEXT = $1`, input.RequestID).Scan(&productType)
+	if requestID != "" {
+		_ = s.pool.QueryRow(ctx, `SELECT product_type FROM blood_requests WHERE id::TEXT = $1`, requestID).Scan(&productType)
 	}
 
 	return DonationCheckinResult{
@@ -1152,6 +1271,24 @@ func (s *Store) CheckinDonation(ctx context.Context, input DonationCheckinReques
 		BloodType:   donor.BloodType,
 		ProductType: productType,
 	}, nil
+}
+
+func (s *Store) activeRequestIDForDonor(ctx context.Context, donorID string) (string, error) {
+	var requestID string
+	err := s.pool.QueryRow(ctx, `
+		SELECT lr.request_id::TEXT
+		FROM live_responses lr
+		JOIN emergency_broadcasts eb ON eb.broadcast_id = lr.broadcast_id
+		WHERE lr.donor_id::TEXT = $1
+		  AND eb.status = 'ACTIVE'
+		  AND lr.status IN ('ACCEPTED', 'ON_THE_WAY')
+		ORDER BY COALESCE(lr.response_at, lr.created_at) DESC
+		LIMIT 1
+	`, donorID).Scan(&requestID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	return requestID, err
 }
 
 func (s *Store) SendDonationThankYouNotification(ctx context.Context, donationID, donorID string, fcm *FCMClient) error {
@@ -1278,7 +1415,7 @@ func (s *Store) advanceLiveResponses(ctx context.Context, requestID string) erro
 		return err
 	}
 
-	statuses := []string{"ACCEPTED", "ON_THE_WAY", "ACCEPTED", "DECLINED", "CHECKED_IN", "ON_THE_WAY", "ACCEPTED"}
+	statuses := []string{"ACCEPTED", "ON_THE_WAY", "ACCEPTED", "DECLINED", "ON_THE_WAY", "ACCEPTED", "DECLINED"}
 	offsets := []time.Duration{1500 * time.Millisecond, 3900 * time.Millisecond, 6300 * time.Millisecond, 8700 * time.Millisecond, 11100 * time.Millisecond, 13500 * time.Millisecond, 15900 * time.Millisecond}
 	elapsed := time.Since(sentAt.Time)
 
@@ -1329,6 +1466,7 @@ func scanStock(row pgx.Row) (BloodStock, error) {
 		&item.Quantity,
 		&item.SafeThreshold,
 		&item.CriticalThreshold,
+		&item.Description,
 		&item.UpdatedAt,
 	)
 	return item, err
@@ -1378,6 +1516,38 @@ func scanRequest(row pgx.Row) (EmergencyRequest, error) {
 		request.FulfilledAt = &fulfilledAt.Time
 	}
 	return request, err
+}
+
+func scanDonorCheckinRequest(row pgx.Row) (DonorCheckinRequest, error) {
+	var item DonorCheckinRequest
+	var broadcastSentAt sql.NullTime
+	var fulfilledAt sql.NullTime
+	err := row.Scan(
+		&item.ID,
+		&item.HospitalName,
+		&item.PicName,
+		&item.PicPhone,
+		&item.BloodType,
+		&item.ProductType,
+		&item.QuantityNeeded,
+		&item.UrgencyLevel,
+		&item.Notes,
+		&item.Status,
+		&item.BroadcastID,
+		&item.EligibleCount,
+		&item.CreatedAt,
+		&broadcastSentAt,
+		&fulfilledAt,
+		&item.ResponseStatus,
+		&item.RespondedAt,
+	)
+	if broadcastSentAt.Valid {
+		item.BroadcastSentAt = &broadcastSentAt.Time
+	}
+	if fulfilledAt.Valid {
+		item.FulfilledAt = &fulfilledAt.Time
+	}
+	return item, err
 }
 
 func scanDonors(rows pgx.Rows) ([]Donor, error) {

@@ -6,6 +6,7 @@ import type {
   ApiEnvelope,
   BloodStock,
   Donor,
+  DonorCheckinRequest,
   EmergencyRequest,
   Hospital,
   LiveResponse,
@@ -81,6 +82,12 @@ export const endpoints = {
     unwrap(await api.put<ApiEnvelope<EmergencyRequest>>(`/emergency/requests/${id}/close`)),
   donors: async (search = "") => unwrap(await api.get<ApiEnvelope<Donor[]>>("/donors", { params: { search } })),
   donor: async (uuid: string) => unwrap(await api.get<ApiEnvelope<Donor>>(`/donors/${encodeURIComponent(uuid)}`)),
+  donorCheckinRequests: async (uuid: string) => {
+    const data = unwrap(
+      await api.get<ApiEnvelope<DonorCheckinRequest[] | null>>(`/donors/${encodeURIComponent(uuid)}/checkin-requests`),
+    );
+    return data ?? [];
+  },
   createDonor: async (payload: unknown) => unwrap(await api.post<ApiEnvelope<Donor>>("/donors", payload)),
   updateDonor: async (id: string, payload: unknown) => unwrap(await api.put<ApiEnvelope<Donor>>(`/donors/${id}`, payload)),
   updateDonorStatus: async (id: string, isActive: boolean) =>
@@ -99,4 +106,5 @@ export const endpoints = {
   createHospital: async (payload: unknown) => unwrap(await api.post<ApiEnvelope<Hospital>>("/hospitals", payload)),
   updateHospital: async (id: string, payload: unknown) =>
     unwrap(await api.put<ApiEnvelope<Hospital>>(`/hospitals/${id}`, payload)),
+  deleteHospital: async (id: string) => unwrap(await api.delete<ApiEnvelope<unknown>>(`/hospitals/${id}`)),
 };

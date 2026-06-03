@@ -2,14 +2,16 @@ import { ShieldCheck } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { bankDarahController } from "../../controllers/bankDarahController";
 import { apiErrorMessage } from "../../models/apiClient";
-import type { Donor } from "../../models/types";
-import { formatDate } from "../../models/status";
+import type { Donor, DonorCheckinRequest } from "../../models/types";
+import { formatDate, responseLabel } from "../../models/status";
 import QRScanner from "../components/QRScanner";
 import StatusBadge from "../components/StatusBadge";
 import PageHeader from "../layout/PageHeader";
 
 export default function CheckinPage() {
   const [donor, setDonor] = useState<Donor | null>(null);
+  const [requests, setRequests] = useState<DonorCheckinRequest[]>([]);
+  const [loadingRequests, setLoadingRequests] = useState(false);
   const [scanError, setScanError] = useState("");
   const [form, setForm] = useState({ systolic: 122, diastolic: 80, hemoglobin: 13.4, weight: 62, requestId: "" });
   const [result, setResult] = useState<{ isEligible: boolean; reasons: string[] } | null>(null);
@@ -20,11 +22,29 @@ export default function CheckinPage() {
     setScanError("");
     setResult(null);
     setSubmitError("");
+    setDonor(null);
+    setRequests([]);
+    setLoadingRequests(false);
+    setForm((current) => ({ ...current, requestId: "" }));
     try {
       const data = await bankDarahController.donor(value);
       setDonor(data);
+      setLoadingRequests(true);
+      try {
+        const eligibleRequests = await bankDarahController.donorCheckinRequests(data.uuid);
+        setRequests(eligibleRequests);
+        setForm((current) => ({ ...current, requestId: eligibleRequests[0]?.id ?? "" }));
+        if (eligibleRequests.length === 0) {
+          setSubmitError("Donor ini belum memilih ingin donor pada request aktif mana pun.");
+        }
+      } catch (err) {
+        setSubmitError(apiErrorMessage(err, "Request check-in donor gagal dimuat."));
+      } finally {
+        setLoadingRequests(false);
+      }
     } catch {
       setDonor(null);
+      setLoadingRequests(false);
       setScanError("Token QR tidak ditemukan atau sudah kedaluwarsa.");
     }
   }
@@ -35,6 +55,11 @@ export default function CheckinPage() {
     setSaving(true);
     setSubmitError("");
     setResult(null);
+    if (!form.requestId) {
+      setSubmitError("Pilih request aktif terlebih dahulu.");
+      setSaving(false);
+      return;
+    }
     try {
       const data = await bankDarahController.checkin({ donorUuid: donor.uuid, ...form });
       setResult(data);
@@ -103,11 +128,26 @@ export default function CheckinPage() {
             <input type="number" value={form.weight} onChange={(event) => setForm({ ...form, weight: Number(event.target.value) })} />
           </label>
           <label className="span-2">
-            Referensi Request
-            <input value={form.requestId} onChange={(event) => setForm({ ...form, requestId: event.target.value })} placeholder="Opsional" />
+            Request Aktif
+            <select
+              value={form.requestId}
+              onChange={(event) => setForm({ ...form, requestId: event.target.value })}
+              required
+              disabled={loadingRequests || requests.length === 0}
+            >
+              {requests.length === 0 && (
+                <option value="">{loadingRequests ? "Memuat request donor..." : "Tidak ada request aktif untuk donor ini"}</option>
+              )}
+              {requests.map((request) => (
+                <option key={request.id} value={request.id}>
+                  {request.hospitalName} - {request.bloodType}/{request.productType} - {responseLabel(request.responseStatus)} -{" "}
+                  {request.quantityNeeded} kantong
+                </option>
+              ))}
+            </select>
           </label>
           <div className="form-actions span-2">
-            <button className="btn primary" type="submit" disabled={saving}>
+            <button className="btn primary" type="submit" disabled={saving || loadingRequests || requests.length === 0}>
               <ShieldCheck size={18} />
               {saving ? "Memproses..." : "Konfirmasi Check-in"}
             </button>
@@ -115,7 +155,7 @@ export default function CheckinPage() {
           {submitError && <div className="alert danger span-2">{submitError}</div>}
           {result && (
             <div className={`alert ${result.isEligible ? "success" : "danger"} span-2`}>
-              {result.isEligible ? "Donor lolos verifikasi medis." : result.reasons.join(", ")}
+              {result.isEligible ? "QR donor berhasil discan. Status donor selesai." : result.reasons.join(", ")}
             </div>
           )}
         </form>

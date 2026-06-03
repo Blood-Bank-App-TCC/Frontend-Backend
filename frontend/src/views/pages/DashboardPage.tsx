@@ -1,6 +1,6 @@
 import { Siren } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { bankDarahController } from "../../controllers/bankDarahController";
 import { apiErrorMessage } from "../../models/apiClient";
 import type { BloodStock, EmergencyRequest } from "../../models/types";
@@ -11,18 +11,54 @@ import Metric from "../components/Metric";
 import PageHeader from "../layout/PageHeader";
 
 export default function DashboardPage() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [stock, setStock] = useState<BloodStock[]>([]);
   const [requests, setRequests] = useState<EmergencyRequest[]>([]);
   const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
 
   useEffect(() => {
-    Promise.all([bankDarahController.stock(), bankDarahController.requests()])
-      .then(([stockData, requestData]) => {
+    let active = true;
+
+    async function load() {
+      try {
+        const [stockData, requestData] = await Promise.all([bankDarahController.stock(), bankDarahController.requests()]);
+        if (!active) return;
         setStock(stockData);
         setRequests(requestData);
-      })
-      .catch((err) => setError(apiErrorMessage(err, "Dashboard gagal memuat data backend.")));
+        setError("");
+      } catch (err) {
+        if (active) {
+          setError(apiErrorMessage(err, "Dashboard gagal memuat data backend."));
+        }
+      }
+    }
+
+    load();
+    const intervalId = window.setInterval(load, 5000);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
   }, []);
+
+  useEffect(() => {
+    if (location.state && (location.state as { broadcastSuccess?: boolean }).broadcastSuccess) {
+      setToast("Broadcast berhasil dikirim.");
+      navigate(`${location.pathname}${location.hash}`, { replace: true, state: null });
+      window.setTimeout(() => setToast(""), 3500);
+    }
+  }, [location, navigate]);
+
+  useEffect(() => {
+    if (location.hash === "#permintaan-aktif") {
+      window.requestAnimationFrame(() => {
+        document.getElementById("permintaan-aktif")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+  }, [location.hash, requests.length]);
 
   const grouped = useMemo(
     () =>
@@ -49,6 +85,11 @@ export default function DashboardPage() {
         }
       />
       {error && <p className="alert danger">{error}</p>}
+      {toast && (
+        <div className="toast success" role="status">
+          {toast}
+        </div>
+      )}
       <section className="metric-grid">
         <Metric label="Total Kantong" value={stock.reduce((sum, item) => sum + item.quantity, 0)} tone="info" />
         <Metric label="Stok Kritis" value={critical} tone="danger" />
@@ -60,12 +101,12 @@ export default function DashboardPage() {
           <BloodTypeCard bloodType={group.bloodType} items={group.items} key={group.bloodType} />
         ))}
       </section>
-      <section className="panel">
+      <section className="panel" id="permintaan-aktif">
         <div className="panel-header">
-          <h2>Permintaan Terbaru</h2>
+          <h2>Permintaan Aktif</h2>
           <Link to="/reports">Lihat laporan</Link>
         </div>
-        <RequestTable requests={requests.slice(0, 5)} />
+        <RequestTable requests={activeRequests} />
       </section>
     </>
   );

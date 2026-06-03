@@ -96,7 +96,7 @@ export default function MonitorPage() {
       <section className="metric-grid">
         <Metric label="Siap Donor" value={counts.accepted} tone="success" />
         <Metric label="Menuju PMI" value={counts.way} tone="info" />
-        <Metric label="Check-in" value={counts.checked} tone="success" />
+        <Metric label="Selesai" value={counts.checked} tone="success" />
         <Metric label="Tidak Bisa" value={counts.declined} tone="warning" />
       </section>
       <section className="panel">

@@ -1,4 +1,4 @@
-import { Activity, ShieldCheck } from "lucide-react";
+import { Activity, Eye, EyeOff, ShieldCheck } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { bankDarahController } from "../../controllers/bankDarahController";
@@ -10,6 +10,7 @@ export default function LoginPage() {
   const setSession = useAuthStore((state) => state.setSession);
   const [username, setUsername] = useState("operator");
   const [password, setPassword] = useState("pmi123");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -47,7 +48,22 @@ export default function LoginPage() {
           </label>
           <label>
             Password
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+            <span className="password-field">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                required
+              />
+              <button
+                className="icon-button password-toggle"
+                type="button"
+                title={showPassword ? "Sembunyikan password" : "Tampilkan password"}
+                onClick={() => setShowPassword((value) => !value)}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </span>
           </label>
           {error && <p className="form-error">{error}</p>}
           <button className="btn primary wide" disabled={loading} type="submit">

@@ -1,18 +1,21 @@
 import { Ambulance } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { bankDarahController } from "../../controllers/bankDarahController";
 import { apiErrorMessage } from "../../models/apiClient";
-import type { BloodType, ProductType, UrgencyLevel } from "../../models/types";
+import { formatIndonesianPhone } from "../../models/phone";
+import type { BloodType, Hospital, ProductType, UrgencyLevel } from "../../models/types";
 import { bloodTypes, productTypes } from "../../models/status";
 import PageHeader from "../layout/PageHeader";
 
 export default function EmergencyNewPage() {
   const navigate = useNavigate();
+  const [hospitals, setHospitals] = useState<Hospital[]>([]);
+  const [selectedHospitalId, setSelectedHospitalId] = useState("");
   const [form, setForm] = useState({
-    hospitalName: "RS Bethesda Yogyakarta",
-    picName: "dr. Nadya",
-    picPhone: "+628123450011",
+    hospitalName: "",
+    picName: "",
+    picPhone: "",
     bloodType: "O-" as BloodType,
     productType: "PRC" as ProductType,
     quantityNeeded: 3,
@@ -20,7 +23,38 @@ export default function EmergencyNewPage() {
     notes: "Perdarahan pascaoperasi, butuh donor secepatnya.",
   });
   const [loading, setLoading] = useState(false);
+  const [loadingHospitals, setLoadingHospitals] = useState(true);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    bankDarahController
+      .hospitals()
+      .then((data) => {
+        setHospitals(data);
+        if (data.length > 0) {
+          applyHospital(data[0]);
+        }
+      })
+      .catch((err) => setError(apiErrorMessage(err, "Daftar rumah sakit gagal dimuat.")))
+      .finally(() => setLoadingHospitals(false));
+  }, []);
+
+  function applyHospital(hospital: Hospital) {
+    setSelectedHospitalId(hospital.id);
+    setForm((value) => ({
+      ...value,
+      hospitalName: hospital.name,
+      picName: hospital.picName,
+      picPhone: formatIndonesianPhone(hospital.picPhone),
+    }));
+  }
+
+  function selectHospital(id: string) {
+    const hospital = hospitals.find((item) => item.id === id);
+    if (hospital) {
+      applyHospital(hospital);
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -43,15 +77,22 @@ export default function EmergencyNewPage() {
       <form className="panel form-grid" onSubmit={submit}>
         <label>
           Nama Rumah Sakit
-          <input value={form.hospitalName} onChange={(event) => setForm({ ...form, hospitalName: event.target.value })} required />
+          <select value={selectedHospitalId} onChange={(event) => selectHospital(event.target.value)} required disabled={loadingHospitals}>
+            {hospitals.length === 0 && <option value="">{loadingHospitals ? "Memuat rumah sakit..." : "Belum ada rumah sakit"}</option>}
+            {hospitals.map((hospital) => (
+              <option key={hospital.id} value={hospital.id}>
+                {hospital.name}
+              </option>
+            ))}
+          </select>
         </label>
         <label>
           Nama PIC
-          <input value={form.picName} onChange={(event) => setForm({ ...form, picName: event.target.value })} required />
+          <input value={form.picName} readOnly required />
         </label>
         <label>
           Nomor Kontak
-          <input value={form.picPhone} onChange={(event) => setForm({ ...form, picPhone: event.target.value })} required />
+          <input value={form.picPhone} readOnly required />
         </label>
         <label>
           Golongan Darah
@@ -71,7 +112,13 @@ export default function EmergencyNewPage() {
         </label>
         <label>
           Jumlah Kantong
-          <input min={1} type="number" value={form.quantityNeeded} onChange={(event) => setForm({ ...form, quantityNeeded: Number(event.target.value) })} />
+          <input
+            min={1}
+            required
+            type="number"
+            value={form.quantityNeeded}
+            onChange={(event) => setForm({ ...form, quantityNeeded: Math.max(1, Number(event.target.value)) })}
+          />
         </label>
         <label>
           Tingkat Urgensi
@@ -86,7 +133,7 @@ export default function EmergencyNewPage() {
           <textarea value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} />
         </label>
         <div className="form-actions span-2">
-          <button className="btn primary" disabled={loading} type="submit">
+          <button className="btn primary" disabled={loading || loadingHospitals || hospitals.length === 0} type="submit">
             <Ambulance size={18} />
             {loading ? "Menyimpan..." : "Cari Donor Eligible"}
           </button>

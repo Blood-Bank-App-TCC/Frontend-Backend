@@ -134,6 +134,8 @@ func (a *App) routeProtected(w http.ResponseWriter, r *http.Request, path string
 		a.handleCreateDonor(w, r)
 	case r.Method == http.MethodPut && len(segments) == 3 && segments[0] == "donors" && segments[2] == "status":
 		a.handleUpdateDonorStatus(w, r, segments[1])
+	case r.Method == http.MethodGet && len(segments) == 3 && segments[0] == "donors" && segments[2] == "checkin-requests":
+		a.handleDonorCheckinRequests(w, r, segments[1])
 	case r.Method == http.MethodGet && len(segments) == 2 && segments[0] == "donors":
 		a.handleGetDonor(w, r, segments[1])
 	case r.Method == http.MethodPut && len(segments) == 2 && segments[0] == "donors":
@@ -510,6 +512,14 @@ func (a *App) handleUpdateDonorStatus(w http.ResponseWriter, r *http.Request, id
 	}
 	donor, err := a.store.UpdateDonorStatus(r.Context(), id, input.IsActive)
 	a.respond(w, donor, err, http.StatusOK)
+}
+
+func (a *App) handleDonorCheckinRequests(w http.ResponseWriter, r *http.Request, key string) {
+	if !a.requireRole(w, r, "SUPER_ADMIN", "OPERATOR") {
+		return
+	}
+	requests, err := a.store.CheckinRequestsForDonor(r.Context(), key)
+	a.respond(w, requests, err, http.StatusOK)
 }
 
 func (a *App) handleCheckin(w http.ResponseWriter, r *http.Request) {

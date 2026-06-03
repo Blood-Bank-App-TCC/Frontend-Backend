@@ -48,3 +48,19 @@ func TestParseHistoryDate(t *testing.T) {
 		t.Fatal("expected invalid date format to fail")
 	}
 }
+
+func TestValidMobileResponseStatus(t *testing.T) {
+	valid := []string{"ACCEPTED", "ON_THE_WAY", "DECLINED"}
+	for _, status := range valid {
+		if !validMobileResponseStatus(status) {
+			t.Fatalf("expected %s to be a valid mobile response", status)
+		}
+	}
+
+	invalid := []string{"CHECKED_IN", "COMPLETED", "NO_RESPONSE", ""}
+	for _, status := range invalid {
+		if validMobileResponseStatus(status) {
+			t.Fatalf("expected %s to be rejected as mobile response", status)
+		}
+	}
+}

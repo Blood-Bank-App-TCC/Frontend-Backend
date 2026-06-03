@@ -1,7 +1,8 @@
-import { Building2, Edit, Plus, Save, X } from "lucide-react";
+import { Building2, Edit, Plus, Save, Trash2, X } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { bankDarahController } from "../../controllers/bankDarahController";
 import { apiErrorMessage } from "../../models/apiClient";
+import { formatIndonesianPhone } from "../../models/phone";
 import type { Hospital } from "../../models/types";
 import StatusBadge from "../components/StatusBadge";
 import PageHeader from "../layout/PageHeader";
@@ -23,6 +24,7 @@ export default function HospitalsPage() {
   const [form, setForm] = useState(emptyForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
@@ -54,7 +56,7 @@ export default function HospitalsPage() {
       name: hospital.name,
       address: hospital.address,
       picName: hospital.picName,
-      picPhone: hospital.picPhone,
+      picPhone: formatIndonesianPhone(hospital.picPhone),
       email: hospital.email ?? "",
       latitude: hospital.latitude,
       longitude: hospital.longitude,
@@ -93,6 +95,27 @@ export default function HospitalsPage() {
     }
   }
 
+  async function deleteHospital(hospital: Hospital) {
+    const confirmed = window.confirm(`Hapus ${hospital.name} dari daftar rumah sakit mitra?`);
+    if (!confirmed) return;
+
+    setDeletingId(hospital.id);
+    setError("");
+    setMessage("");
+    try {
+      await bankDarahController.deleteHospital(hospital.id);
+      if (editingId === hospital.id) {
+        closeForm();
+      }
+      setMessage("Rumah sakit berhasil dihapus.");
+      await load();
+    } catch (err) {
+      setError(apiErrorMessage(err, "Rumah sakit gagal dihapus."));
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
     <>
       <PageHeader
@@ -125,7 +148,15 @@ export default function HospitalsPage() {
           </label>
           <label>
             Telepon PIC
-            <input value={form.picPhone} onChange={(event) => setForm({ ...form, picPhone: event.target.value })} required />
+            <input
+              inputMode="tel"
+              maxLength={15}
+              pattern="^\+62[0-9]{1,12}$"
+              title="Nomor harus diawali +62 dan maksimal 12 digit setelah kode negara."
+              value={form.picPhone}
+              onChange={(event) => setForm({ ...form, picPhone: formatIndonesianPhone(event.target.value) })}
+              required
+            />
           </label>
           <label>
             Email
@@ -159,9 +190,20 @@ export default function HospitalsPage() {
             <article className="hospital-card" key={hospital.id}>
               <div className="hospital-card__top">
                 <Building2 size={24} />
-                <button className="icon-button" title="Edit rumah sakit" type="button" onClick={() => openEdit(hospital)}>
-                  <Edit size={18} />
-                </button>
+                <div className="hospital-card__actions">
+                  <button className="icon-button" title="Edit rumah sakit" type="button" onClick={() => openEdit(hospital)}>
+                    <Edit size={18} />
+                  </button>
+                  <button
+                    className="icon-button danger"
+                    disabled={deletingId === hospital.id}
+                    title="Hapus rumah sakit"
+                    type="button"
+                    onClick={() => deleteHospital(hospital)}
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                </div>
               </div>
               <h2>{hospital.name}</h2>
               <p>{hospital.address || "-"}</p>

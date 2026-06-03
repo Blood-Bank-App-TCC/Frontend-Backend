@@ -16,6 +16,7 @@ type BloodStock struct {
 	Quantity          int       `json:"quantity"`
 	SafeThreshold     int       `json:"safeThreshold"`
 	CriticalThreshold int       `json:"criticalThreshold"`
+	Description       string    `json:"description"`
 	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
@@ -35,6 +36,12 @@ type EmergencyRequest struct {
 	CreatedAt       time.Time  `json:"createdAt"`
 	BroadcastSentAt *time.Time `json:"broadcastSentAt,omitempty"`
 	FulfilledAt     *time.Time `json:"fulfilledAt,omitempty"`
+}
+
+type DonorCheckinRequest struct {
+	EmergencyRequest
+	ResponseStatus string    `json:"responseStatus"`
+	RespondedAt    time.Time `json:"respondedAt"`
 }
 
 type DonationRecord struct {
@@ -111,10 +118,11 @@ type MobileRespondRequest struct {
 }
 
 type StockUpdateRequest struct {
-	Mode      string `json:"mode"`
-	Quantity  int    `json:"quantity"`
-	Reference string `json:"reference"`
-	Notes     string `json:"notes"`
+	Mode       string `json:"mode"`
+	Quantity   int    `json:"quantity"`
+	Reference  string `json:"reference"`
+	Notes      string `json:"notes"`
+	Keterangan string `json:"keterangan"`
 }
 
 type EmergencyCreateRequest struct {
@@ -168,12 +176,12 @@ type DonationCheckinRequest struct {
 }
 
 type DonationCheckinResult struct {
-	DonationID string   `json:"donationId"`
-	IsEligible bool     `json:"isEligible"`
-	Reasons    []string `json:"reasons"`
-	DonorID    string   `json:"-"`
-	BloodType  string   `json:"-"`
-	ProductType string `json:"-"`
+	DonationID  string   `json:"donationId"`
+	IsEligible  bool     `json:"isEligible"`
+	Reasons     []string `json:"reasons"`
+	DonorID     string   `json:"-"`
+	BloodType   string   `json:"-"`
+	ProductType string   `json:"-"`
 }
 
 type HospitalRequest struct {

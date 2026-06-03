@@ -25,7 +25,7 @@ export function responseLabel(status: ResponseStatus) {
     ACCEPTED: "Siap donor",
     ON_THE_WAY: "Menuju PMI",
     DECLINED: "Tidak bisa",
-    CHECKED_IN: "Check-in",
+    CHECKED_IN: "Selesai",
     NO_RESPONSE: "Belum respons",
   };
   return labels[status];

@@ -97,6 +97,7 @@ export function StockTable({ stock }: { stock: BloodStock[] }) {
             <th>Threshold</th>
             <th>Status</th>
             <th>Update</th>
+            <th>Keterangan</th>
           </tr>
         </thead>
         <tbody>
@@ -114,6 +115,7 @@ export function StockTable({ stock }: { stock: BloodStock[] }) {
                 </StatusBadge>
               </td>
               <td>{formatDateTime(item.updatedAt)}</td>
+              <td>{item.description || "-"}</td>
             </tr>
           ))}
         </tbody>

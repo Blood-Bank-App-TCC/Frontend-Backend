@@ -32,7 +32,7 @@ export default function BroadcastPage() {
     setSending(true);
     try {
       await bankDarahController.broadcast(id);
-      navigate(`/emergency/${id}/monitor`);
+      navigate("/dashboard#permintaan-aktif", { state: { broadcastSuccess: true } });
     } catch (err) {
       setError(apiErrorMessage(err, "Broadcast gagal dikirim."));
     } finally {

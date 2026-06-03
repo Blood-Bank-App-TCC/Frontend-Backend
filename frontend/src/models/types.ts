@@ -25,6 +25,7 @@ export interface BloodStock {
   quantity: number;
   safeThreshold: number;
   criticalThreshold: number;
+  description: string;
   updatedAt: string;
 }
 
@@ -44,6 +45,11 @@ export interface EmergencyRequest {
   createdAt: string;
   broadcastSentAt?: string;
   fulfilledAt?: string;
+}
+
+export interface DonorCheckinRequest extends EmergencyRequest {
+  responseStatus: ResponseStatus;
+  respondedAt: string;
 }
 
 export interface DonationRecord {

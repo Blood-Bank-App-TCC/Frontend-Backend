@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -278,6 +279,73 @@ func TestHospitalDeactivationIntegration(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("expected include_inactive list to include deactivated hospital")
+	}
+}
+
+func TestDonorCheckinRequestsFilterIntegration(t *testing.T) {
+	env := newIntegrationEnv(t, nil)
+	adminToken := mustSignAdminToken(t, env.cfg.JWTSecret)
+	donor := mustCreateDonor(t, env, "checkin-filter", false)
+	ctx := context.Background()
+
+	acceptedRequest, err := env.store.CreateEmergencyRequest(ctx, EmergencyCreateRequest{
+		HospitalName:   "RS Eligible " + uniqueSuffix(),
+		PicName:        "PIC Eligible",
+		PicPhone:       "+6281200011111",
+		BloodType:      donor.BloodType,
+		ProductType:    "WB",
+		QuantityNeeded: 2,
+		UrgencyLevel:   "URGENT",
+	}, "11111111-1111-1111-1111-111111111111")
+	if err != nil {
+		t.Fatalf("create accepted request: %v", err)
+	}
+	ignoredRequest, err := env.store.CreateEmergencyRequest(ctx, EmergencyCreateRequest{
+		HospitalName:   "RS Belum Direspons " + uniqueSuffix(),
+		PicName:        "PIC Belum Direspons",
+		PicPhone:       "+6281200022222",
+		BloodType:      donor.BloodType,
+		ProductType:    "PRC",
+		QuantityNeeded: 3,
+		UrgencyLevel:   "URGENT",
+	}, "11111111-1111-1111-1111-111111111111")
+	if err != nil {
+		t.Fatalf("create ignored request: %v", err)
+	}
+
+	acceptedBroadcast, err := env.store.BroadcastRequest(ctx, acceptedRequest.ID, nil)
+	if err != nil {
+		t.Fatalf("broadcast accepted request: %v", err)
+	}
+	if _, err := env.store.BroadcastRequest(ctx, ignoredRequest.ID, nil); err != nil {
+		t.Fatalf("broadcast ignored request: %v", err)
+	}
+	if _, err := env.store.RespondToBroadcast(ctx, donor.UUID, acceptedBroadcast.BroadcastID, "ACCEPTED"); err != nil {
+		t.Fatalf("respond accepted request: %v", err)
+	}
+
+	status, body := performJSONRequest(
+		t,
+		env.handler,
+		http.MethodGet,
+		"/api/v1/donors/"+url.PathEscape(donor.UUID)+"/checkin-requests",
+		nil,
+		adminToken,
+	)
+	if status != http.StatusOK {
+		t.Fatalf("expected 200 from donor checkin requests, got %d with body %s", status, body)
+	}
+
+	requests := decodeEnvelopeMap(t, body)["data"].([]interface{})
+	if len(requests) != 1 {
+		t.Fatalf("expected only the donor-accepted active request, got %d: %s", len(requests), body)
+	}
+	request := requests[0].(map[string]interface{})
+	if request["id"] != acceptedRequest.ID {
+		t.Fatalf("expected request %s, got %v", acceptedRequest.ID, request["id"])
+	}
+	if request["responseStatus"] != "ACCEPTED" {
+		t.Fatalf("expected responseStatus ACCEPTED, got %v", request["responseStatus"])
 	}
 }
 
