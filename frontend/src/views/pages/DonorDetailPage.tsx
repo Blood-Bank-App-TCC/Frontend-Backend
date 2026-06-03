@@ -2,6 +2,7 @@ import { ArrowLeft, Edit, Power, Save, X } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { bankDarahController } from "../../controllers/bankDarahController";
+import { apiErrorMessage } from "../../models/apiClient";
 import type { Donor } from "../../models/types";
 import { formatDate } from "../../models/status";
 import Loading from "../components/Loading";
@@ -11,8 +12,11 @@ import PageHeader from "../layout/PageHeader";
 export default function DonorDetailPage() {
   const { id = "" } = useParams();
   const [donor, setDonor] = useState<Donor | null>(null);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   const [editForm, setEditForm] = useState({
     fullName: "",
     phone: "",
@@ -21,39 +25,59 @@ export default function DonorDetailPage() {
   });
 
   useEffect(() => {
-    bankDarahController.donor(id).then((d) => {
-      setDonor(d);
-      setEditForm({
-        fullName: d.fullName,
-        phone: d.phone,
-        email: d.email ?? "",
-        address: d.address,
-      });
-    });
+    setLoading(true);
+    setError("");
+    bankDarahController
+      .donor(id)
+      .then((d) => {
+        setDonor(d);
+        setEditForm({
+          fullName: d.fullName,
+          phone: d.phone,
+          email: d.email ?? "",
+          address: d.address,
+        });
+      })
+      .catch((err) => setError(apiErrorMessage(err, "Profil pendonor gagal dimuat.")))
+      .finally(() => setLoading(false));
   }, [id]);
 
   async function toggleStatus() {
     if (!donor) return;
-    setSaving(true);
-    const updated = await bankDarahController.updateDonorStatus(donor.id, !donor.isActive);
-    setDonor(updated);
-    setSaving(false);
-  }
-
-  async function submitEdit(event: FormEvent) {
-    event.preventDefault();
-    if (!donor) return;
+    setError("");
+    setMessage("");
     setSaving(true);
     try {
-      const updated = await bankDarahController.updateDonor(donor.id, editForm);
+      const updated = await bankDarahController.updateDonorStatus(donor.id, !donor.isActive);
       setDonor(updated);
-      setShowEdit(false);
+      setMessage(updated.isActive ? "Pendonor berhasil diaktifkan." : "Pendonor berhasil dinonaktifkan.");
+    } catch (err) {
+      setError(apiErrorMessage(err, "Status pendonor gagal diperbarui."));
     } finally {
       setSaving(false);
     }
   }
 
-  if (!donor) return <Loading title="Memuat profil donor" />;
+  async function submitEdit(event: FormEvent) {
+    event.preventDefault();
+    if (!donor) return;
+    setError("");
+    setMessage("");
+    setSaving(true);
+    try {
+      const updated = await bankDarahController.updateDonor(donor.id, editForm);
+      setDonor(updated);
+      setShowEdit(false);
+      setMessage("Data pendonor berhasil diperbarui.");
+    } catch (err) {
+      setError(apiErrorMessage(err, "Data pendonor gagal diperbarui."));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) return <Loading title="Memuat profil donor" />;
+  if (!donor) return <p className="alert danger">{error || "Pendonor tidak ditemukan."}</p>;
 
   return (
     <>
@@ -78,7 +102,9 @@ export default function DonorDetailPage() {
         }
       />
 
-      {/* ── Form Edit Donor ── */}
+      {error && <p className="alert danger">{error}</p>}
+      {message && <p className="alert success">{message}</p>}
+
       {showEdit && (
         <form className="panel form-grid" onSubmit={submitEdit}>
           <label>

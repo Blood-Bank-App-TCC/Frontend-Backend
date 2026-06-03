@@ -754,6 +754,13 @@ td a {
   padding: 1rem;
 }
 
+.hospital-card__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 38px;
+}
+
 .hospital-card h2,
 .hospital-card p {
   margin: 0;

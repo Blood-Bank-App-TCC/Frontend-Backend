@@ -2,6 +2,7 @@ import { Activity, ShieldCheck } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { bankDarahController } from "../../controllers/bankDarahController";
+import { apiErrorMessage } from "../../models/apiClient";
 import { useAuthStore } from "../../models/authStore";
 
 export default function LoginPage() {
@@ -20,8 +21,8 @@ export default function LoginPage() {
       const session = await bankDarahController.login(username, password);
       setSession(session.token, session.user);
       navigate("/dashboard", { replace: true });
-    } catch {
-      setError("Username atau password tidak sesuai.");
+    } catch (err) {
+      setError(apiErrorMessage(err, "Username atau password tidak sesuai."));
     } finally {
       setLoading(false);
     }
@@ -42,11 +43,11 @@ export default function LoginPage() {
         <form className="form-stack" onSubmit={submit}>
           <label>
             Username
-            <input value={username} onChange={(event) => setUsername(event.target.value)} />
+            <input value={username} onChange={(event) => setUsername(event.target.value)} required />
           </label>
           <label>
             Password
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
           </label>
           {error && <p className="form-error">{error}</p>}
           <button className="btn primary wide" disabled={loading} type="submit">

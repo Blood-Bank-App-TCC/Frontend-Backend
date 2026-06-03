@@ -2,7 +2,7 @@ export type BloodType = "A+" | "A-" | "B+" | "B-" | "O+" | "O-" | "AB+" | "AB-";
 export type ProductType = "WB" | "PRC" | "FFP" | "THROMBOCYTE";
 export type UrgencyLevel = "CRITICAL" | "URGENT" | "NORMAL";
 export type ResponseStatus = "ACCEPTED" | "ON_THE_WAY" | "DECLINED" | "CHECKED_IN" | "NO_RESPONSE";
-export type RequestStatus = "PENDING" | "ACTIVE" | "FULFILLED" | "EXPIRED";
+export type RequestStatus = "PENDING" | "ACTIVE" | "FULFILLED" | "EXPIRED" | "CLOSED";
 
 export interface AdminUser {
   id: string;
