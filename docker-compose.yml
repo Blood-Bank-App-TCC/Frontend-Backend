@@ -32,8 +32,12 @@ services:
       PMI_LONGITUDE: 110.3798
       ELIGIBLE_RADIUS_KM: 10
       DEMO_MODE: "true"
+      FCM_PROJECT_ID: blood-bank-3239d
+      FCM_SERVICE_ACCOUNT_PATH: /app/firebase-service-account.json
     ports:
       - "8080:8080"
+    volumes:
+      - ./backend/firebase-service-account.json:/app/firebase-service-account.json:ro
     depends_on:
       postgres:
         condition: service_healthy

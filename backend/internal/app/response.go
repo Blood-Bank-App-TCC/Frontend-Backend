@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 )
 
@@ -21,6 +22,7 @@ func okMessage(w http.ResponseWriter, message string, status int) {
 }
 
 func fail(w http.ResponseWriter, status int, code, message string) {
+	slog.Default().Warn("request failed", "status", status, "code", code, "message", message)
 	writeJSON(w, status, envelope{Success: false, Code: code, Message: message})
 }
 

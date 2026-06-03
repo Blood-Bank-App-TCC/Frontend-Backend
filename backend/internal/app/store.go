@@ -1791,7 +1791,7 @@ func errNotFound(message string) error {
 }
 
 func validMobileResponseStatus(status string) bool {
-	return status == "ACCEPTED" || status == "DECLINED" || status == "ON_THE_WAY"
+	return status == "ACCEPTED" || status == "DECLINED" || status == "ON_THE_WAY" || status == "CANCELLED"
 }
 
 func validMobileStatusTransition(current, next string) bool {
@@ -1799,7 +1799,9 @@ func validMobileStatusTransition(current, next string) bool {
 	case "NO_RESPONSE":
 		return next == "ACCEPTED" || next == "DECLINED"
 	case "ACCEPTED":
-		return next == "ON_THE_WAY"
+		return next == "ON_THE_WAY" || next == "CANCELLED"
+	case "DECLINED":
+		return next == "ACCEPTED"
 	default:
 		return false
 	}

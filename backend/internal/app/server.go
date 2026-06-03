@@ -37,6 +37,7 @@ func (a *App) Handler() http.Handler {
 }
 
 func (a *App) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	a.logger.Info("incoming request", "method", r.Method, "path", r.URL.Path, "remote_addr", r.RemoteAddr)
 	a.setCORS(w, r)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
