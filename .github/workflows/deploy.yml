@@ -1,0 +1,64 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy-backend:
+    name: Deploy Backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy Backend ke Cloud Run
+        run: |
+          gcloud run deploy bank-darah-backend \
+            --source ./backend \
+            --region asia-southeast2 \
+            --platform managed \
+            --allow-unauthenticated \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --add-cloudsql-instances ${{ secrets.GCP_PROJECT_ID }}:asia-southeast2:bank-darah-db \
+            --set-secrets="DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,QR_ENCRYPTION_KEY=QR_ENCRYPTION_KEY:latest" \
+            --set-env-vars="PORT=8080,DEMO_MODE=true,AUTH_REQUIRED=true,PMI_NAME=PMI Kota Yogyakarta,ELIGIBLE_RADIUS_KM=10" \
+            --quiet
+
+  deploy-frontend:
+    name: Deploy Frontend
+    runs-on: ubuntu-latest
+    needs: deploy-backend  # Tunggu backend selesai dulu
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy Frontend ke Cloud Run
+        run: |
+          gcloud run deploy bank-darah-frontend \
+            --source ./frontend \
+            --region asia-southeast2 \
+            --platform managed \
+            --allow-unauthenticated \
+            --project ${{ secrets.GCP_PROJECT_ID }} \
+            --port 5173 \
+            --quiet
